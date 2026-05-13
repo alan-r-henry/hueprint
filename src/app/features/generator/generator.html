@@ -1,0 +1,105 @@
+<div class="dashboard-wrapper">
+  <header class="app-header">
+    <h1>Paint-by-Numbers Engine</h1>
+    <p>Convert raster photography directly into layered, clean SVG template patterns.</p>
+  </header>
+
+  <main class="grid-container">
+    <section class="control-panel">
+      <div class="card">
+        <h2>1. Ingest Master Image</h2>
+        <div class="file-upload-box">
+          <input type="file" id="fileInput" accept="image/*" (change)="onFileSelected($event)" />
+          <label for="fileInput" class="upload-btn">
+            @if (selectedFile()) {
+              Change File: {{ selectedFile()?.name }}
+            } @else {
+              Choose Image File
+            }
+          </label>
+        </div>
+
+        @if (previewUrl()) {
+          <div class="raster-preview">
+            <img [src]="previewUrl()" alt="Source Raster Data Preview" />
+          </div>
+        }
+      </div>
+
+      <div class="card configuration-card">
+        <h2>2. Quantization Profiles</h2>
+        
+        <div class="slider-group">
+          <label class="slider-header">
+            <span>Color Palette Target (K):</span>
+            <span class="badge">{{ config().clusterCount }}</span>
+          </label>
+          <input type="range" min="2" max="24" step="1" [value]="config().clusterCount" (input)="updateConfig('clusterCount', $event)" />
+          <span class="helper-text">Limits dynamic color range across vector layers.</span>
+        </div>
+
+        <div class="slider-group">
+          <label class="slider-header">
+            <span>Noise Culling Area Threshold:</span>
+            <span class="badge">{{ config().minFacetArea }}px</span>
+          </label>
+          <input type="range" min="1" max="100" step="1" [value]="config().minFacetArea" (input)="updateConfig('minFacetArea', $event)" />
+          <span class="helper-text">Suppresses stray, isolated speckle noise.</span>
+        </div>
+
+        <button class="action-btn generate-btn" [disabled]="!selectedFile() || isProcessing()" (click)="generateCanvas()">
+          @if (isProcessing()) {
+            Processing Graphics Pipeline...
+          } @else {
+            Execute Vector Tracing
+          }
+        </button>
+      </div>
+
+      @if (resultData()) {
+        <div class="card color-summary-card">
+          <h2>Allocated Color IDs</h2>
+          <div class="palette-swatch-grid">
+            @for (item of resultData()?.palette; track item.id) {
+              <div class="swatch-item">
+                <div class="color-box" [style.background]="item.hex">
+                  <span class="color-label" [style.color]="item.percentage > 50 ? '#fff' : '#000'">{{ item.id }}</span>
+                </div>
+                <div class="swatch-stats">
+                  <span class="hex-text">{{ item.hex }}</span>
+                  <span class="freq-text">{{ item.percentage }}%</span>
+                </div>
+              </div>
+            }
+          </div>
+        </div>
+      }
+    </section>
+
+    <section class="output-panel">
+      <div class="canvas-display-card">
+        <div class="output-header">
+          <h2>Serialized Output Stage</h2>
+          @if (resultData()) {
+            <button class="action-btn download-btn" (click)="downloadSVG()">Download SVG Outline</button>
+          }
+        </div>
+
+        <div class="render-viewport">
+          @if (isProcessing()) {
+            <div class="loading-state">
+              <div class="spinner"></div>
+              <p>Executing Pixel K-Means Clustering & Border Segment Mapping...</p>
+            </div>
+          } @else if (safeSvgContent()) {
+            <div class="svg-container" [innerHTML]="safeSvgContent()"></div>
+          } @else {
+            <div class="empty-state">
+              <p>Configure input profile and select an image to generate printable template data.</p>
+            </div>
+          }
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
