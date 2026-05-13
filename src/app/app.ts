@@ -1,11 +1,10 @@
-import { Component, signal } from '@angular/core';
+import { Component } from '@angular/core';
+import { GeneratorComponent } from './features/generator/generator';
 
 @Component({
   selector: 'app-root',
-  imports: [],
+  imports: [GeneratorComponent],
   templateUrl: './app.html',
-  styleUrl: './app.scss',
+  styleUrl: './app.scss'
 })
-export class App {
-  protected readonly title = signal('paint-by-numbers');
-}
+export class App {}
