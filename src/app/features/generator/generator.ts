@@ -6,9 +6,10 @@ import { PaintEngineService } from '../../core/services/paintengine.service';
 
 @Component({
   selector: 'app-generator',
+  standalone: true,
   imports: [CommonModule],
-  templateUrl: './generator.component.html',
-  styleUrls: ['./generator.component.scss']
+  templateUrl: './generator.html',
+  styleUrls: ['./generator.scss']
 })
 export class GeneratorComponent {
   private paintEngine = inject(PaintEngineService);
