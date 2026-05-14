@@ -39,22 +39,18 @@ export class PaintEngineService {
     const data = imageData.data;
     const totalPixels = width * height;
 
-    // 1. Extract Pixels and convert directly to CIELAB space for perceptual processing
+    // 1. Extract raw pixels and convert to CIELAB space
     const labPixels: LAB[] = [];
     for (let i = 0; i < data.length; i += 4) {
       const rgb = { r: data[i], g: data[i + 1], b: data[i + 2] };
       labPixels.push(this.rgbToLab(rgb));
     }
 
-    // 2. Perform K-Means Clustering strictly within Perceptual LAB Space
+    // 2. Execute K-Means Perceptual Clustering
     const labCentroids = this.runKMeansLab(labPixels, config.clusterCount);
-
-    // Convert finalized Lab centroids back to master RGB palette array
     const palette: RGB[] = labCentroids.map((c) => this.labToRgb(c));
     const labels = new Int32Array(totalPixels);
-    const frequencyMap = new Map<number, number>();
 
-    // Assign pixels to closest perceptual cluster ID
     for (let i = 0; i < labPixels.length; i++) {
       let minDist = Infinity;
       let bestCluster = 0;
@@ -62,7 +58,6 @@ export class PaintEngineService {
 
       for (let c = 0; c < labCentroids.length; c++) {
         const cent = labCentroids[c];
-        // Euclidean distance in Lab space matches human visual sensitivity
         const dist = Math.hypot(p.l - cent.l, p.a - cent.a, p.b - cent.b);
         if (dist < minDist) {
           minDist = dist;
@@ -70,20 +65,26 @@ export class PaintEngineService {
         }
       }
       labels[i] = bestCluster;
-      frequencyMap.set(bestCluster, (frequencyMap.get(bestCluster) || 0) + 1);
     }
 
-    // Generate output raster stage DataURLs
+    // STAGE 1: Capture Raw Quantized Image View (Pre-reduction)
     const quantizedDataUrl = this.generateStageDataUrl(labels, palette, width, height);
-    const reductionDataUrl = this.generateReductionStage(
-      labels,
-      palette,
-      width,
-      height,
-      config.minFacetArea,
-    );
 
-    // Vector pipeline compilation
+    // STAGE 2: Execute true multi-pass Morphological Facet Reduction
+    // Mutates the `labels` array directly to absorb micro-blobs into valid surrounding neighbors
+    this.reduceFacets(labels, width, height, config.minFacetArea);
+
+    // Capture the clean Facet Reduction view showing the image post-absorption
+    const reductionDataUrl = this.generateStageDataUrl(labels, palette, width, height);
+
+    // Re-calculate the final frequency allocation percentages from the cleaned labels array
+    const frequencyMap = new Map<number, number>();
+    for (let i = 0; i < totalPixels; i++) {
+      const c = labels[i];
+      frequencyMap.set(c, (frequencyMap.get(c) || 0) + 1);
+    }
+
+    // Vector Trace Pre-compilation setup
     const svgHeader = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="100%" height="100%">\n`;
     const styleBase = `<style>path { stroke: #444444; stroke-width: 0.3px; stroke-linejoin: round; stroke-linecap: round; fill: none; } text { font-family: system-ui, sans-serif; font-size: 2px; font-weight: 700; fill: #111; text-anchor: middle; dominant-baseline: central; }</style>\n`;
 
@@ -94,6 +95,7 @@ export class PaintEngineService {
     const visited = new Uint8Array(totalPixels);
     const currentFacetGrid = new Uint8Array(totalPixels);
 
+    // Scan the cleaned pixel grid to build optimized vector outlines
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const startIdx = y * width + x;
@@ -145,25 +147,24 @@ export class PaintEngineService {
           }
         }
 
-        if (componentIndices.length >= config.minFacetArea) {
-          const pathData = this.traceContourPath(componentIndices, currentFacetGrid, width, height);
-          const labelX = sumX / componentIndices.length + 0.5;
-          const labelY = sumY / componentIndices.length + 0.5;
-          const fillHex = this.rgbToHex(palette[targetCluster]);
+        // Trace paths for remaining facets
+        const pathData = this.traceContourPath(componentIndices, currentFacetGrid, width, height);
+        const labelX = sumX / componentIndices.length + 0.5;
+        const labelY = sumY / componentIndices.length + 0.5;
+        const fillHex = this.rgbToHex(palette[targetCluster]);
 
-          tracingPaths += `  <path d="${pathData}" />\n`;
+        tracingPaths += `  <path d="${pathData}" />\n`;
 
-          const boxWidth = Math.max(1.5, (maxX - minX) * 0.2);
-          const boxHeight = Math.max(1.5, (maxY - minY) * 0.2);
-          placementElements += `  <path d="${pathData}" stroke="#bbbbbb" stroke-width="0.2px" />\n`;
-          placementElements += `  <rect x="${labelX - boxWidth / 2}" y="${labelY - boxHeight / 2}" width="${boxWidth}" height="${boxHeight}" fill="#ff0000" opacity="0.8" />\n`;
+        const boxWidth = Math.max(1.5, (maxX - minX) * 0.2);
+        const boxHeight = Math.max(1.5, (maxY - minY) * 0.2);
+        placementElements += `  <path d="${pathData}" stroke="#bbbbbb" stroke-width="0.2px" />\n`;
+        placementElements += `  <rect x="${labelX - boxWidth / 2}" y="${labelY - boxHeight / 2}" width="${boxWidth}" height="${boxHeight}" fill="#ff0000" opacity="0.8" />\n`;
 
-          finalComposite += `  <g>\n`;
-          finalComposite += `    <path d="${pathData}" fill="${fillHex}" opacity="0.6" />\n`;
-          finalComposite += `    <path d="${pathData}" />\n`;
-          finalComposite += `    <text x="${labelX.toFixed(1)}" y="${labelY.toFixed(1)}">${targetCluster + 1}</text>\n`;
-          finalComposite += `  </g>\n`;
-        }
+        finalComposite += `  <g>\n`;
+        finalComposite += `    <path d="${pathData}" fill="${fillHex}" opacity="0.6" />\n`;
+        finalComposite += `    <path d="${pathData}" />\n`;
+        finalComposite += `    <text x="${labelX.toFixed(1)}" y="${labelY.toFixed(1)}">${targetCluster + 1}</text>\n`;
+        finalComposite += `  </g>\n`;
 
         for (const idx of componentIndices) {
           currentFacetGrid[idx] = 0;
@@ -199,8 +200,100 @@ export class PaintEngineService {
   }
 
   /**
-   * K-Means Implementation executed purely over CIELAB space
+   * Directly mutates the labels matrix to absorb small isolated pixel blobs into valid neighbors.
    */
+  private reduceFacets(labels: Int32Array, width: number, height: number, minArea: number): void {
+    const totalPixels = width * height;
+    const visited = new Uint8Array(totalPixels);
+
+    // Allow up to 4 consecutive clean-up passes to absorb compound noise chains
+    const maxPasses = 4;
+
+    for (let pass = 0; pass < maxPasses; pass++) {
+      let absorbedCount = 0;
+      visited.fill(0);
+
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const startIdx = y * width + x;
+          if (visited[startIdx]) continue;
+
+          const targetCluster = labels[startIdx];
+          const componentIndices: number[] = [];
+          const queue: number[] = [startIdx];
+          visited[startIdx] = 1;
+
+          // Track surrounding boundary color contacts to find the most visually dominant neighbor
+          const borderFrequency = new Map<number, number>();
+
+          while (queue.length > 0) {
+            const curr = queue.pop()!;
+            componentIndices.push(curr);
+
+            const cx = curr % width;
+            const cy = Math.floor(curr / width);
+
+            const neighbors = [
+              { nx: cx + 1, ny: cy },
+              { nx: cx - 1, ny: cy },
+              { nx: cx, ny: cy + 1 },
+              { nx: cx, ny: cy - 1 },
+            ];
+
+            for (const n of neighbors) {
+              if (n.nx >= 0 && n.nx < width && n.ny >= 0 && n.ny < height) {
+                const nIdx = n.ny * width + n.nx;
+                const neighborCluster = labels[nIdx];
+
+                if (neighborCluster === targetCluster) {
+                  if (!visited[nIdx]) {
+                    visited[nIdx] = 1;
+                    queue.push(nIdx);
+                  }
+                } else {
+                  // External boundary found: tally the contact weight for this neighboring color
+                  borderFrequency.set(
+                    neighborCluster,
+                    (borderFrequency.get(neighborCluster) || 0) + 1,
+                  );
+                }
+              }
+            }
+          }
+
+          // If the extracted component fails the surface area culling ceiling, execute absorption overwrite
+          if (componentIndices.length < minArea) {
+            let bestNeighborCluster = targetCluster;
+            let maxContact = -1;
+
+            // Find the adjacent cluster with the highest shared border mass
+            borderFrequency.forEach((contactCount, clusterId) => {
+              if (contactCount > maxContact) {
+                maxContact = contactCount;
+                bestNeighborCluster = clusterId;
+              }
+            });
+
+            // If a valid alternative neighbor interface exists, mutate the array
+            if (bestNeighborCluster !== targetCluster) {
+              for (const idx of componentIndices) {
+                labels[idx] = bestNeighborCluster;
+              }
+              absorbedCount++;
+            }
+          }
+        }
+      }
+
+      // Exit early if the iteration finishes cleanly without modifying any matrix layers
+      if (absorbedCount === 0) break;
+    }
+  }
+
+  // ==========================================================
+  // CORE QUANTIZATION ALGORITHMS
+  // ==========================================================
+
   private runKMeansLab(pixels: LAB[], k: number): LAB[] {
     const centroids: LAB[] = [];
     for (let i = 0; i < k; i++) {
@@ -234,14 +327,12 @@ export class PaintEngineService {
           const nl = sums[c].l / sums[c].count;
           const na = sums[c].a / sums[c].count;
           const nb = sums[c].b / sums[c].count;
-
           if (
             Math.abs(centroids[c].l - nl) > 0.1 ||
             Math.abs(centroids[c].a - na) > 0.1 ||
             Math.abs(centroids[c].b - nb) > 0.1
-          ) {
+          )
             moved = true;
-          }
           centroids[c] = { l: nl, a: na, b: nb };
         }
       }
@@ -251,20 +342,17 @@ export class PaintEngineService {
   }
 
   // ==========================================================
-  // COLOR SPACE CONVERSION MATH (RGB <-> XYZ <-> CIELAB)
+  // COLOR SPACE CONVERSIONS
   // ==========================================================
 
   private rgbToLab(color: RGB): LAB {
-    // 1. Convert standard sRGB to linear RGB space
     let r = color.r / 255;
     let g = color.g / 255;
     let b = color.b / 255;
-
     r = r > 0.04045 ? Math.pow((r + 0.055) / 1.055, 2.4) : r / 12.92;
     g = g > 0.04045 ? Math.pow((g + 0.055) / 1.055, 2.4) : g / 12.92;
     b = b > 0.04045 ? Math.pow((b + 0.055) / 1.055, 2.4) : b / 12.92;
 
-    // 2. Linear RGB to intermediate XYZ space using D65 illuminant
     r *= 100;
     g *= 100;
     b *= 100;
@@ -272,8 +360,6 @@ export class PaintEngineService {
     const y = r * 0.2126 + g * 0.7152 + b * 0.0722;
     const z = r * 0.0193 + g * 0.1192 + b * 0.9505;
 
-    // 3. XYZ to CIELAB space mapping
-    // Reference white points for standard daylight D65
     const refX = 95.047;
     const refY = 100.0;
     const refZ = 108.883;
@@ -285,19 +371,13 @@ export class PaintEngineService {
     py = py > 0.008856 ? Math.pow(py, 1 / 3) : 7.787 * py + 16 / 116;
     pz = pz > 0.008856 ? Math.pow(pz, 1 / 3) : 7.787 * pz + 16 / 116;
 
-    return {
-      l: 116 * py - 16,
-      a: 500 * (px - py),
-      b: 200 * (py - pz),
-    };
+    return { l: 116 * py - 16, a: 500 * (px - py), b: 200 * (py - pz) };
   }
 
   private labToRgb(lab: LAB): RGB {
-    // 1. CIELAB to XYZ space
     let py = (lab.l + 16) / 116;
     let px = lab.a / 500 + py;
     let pz = py - lab.b / 200;
-
     const py3 = Math.pow(py, 3);
     const px3 = Math.pow(px, 3);
     const pz3 = Math.pow(pz, 3);
@@ -312,12 +392,10 @@ export class PaintEngineService {
     const y = (py * refY) / 100;
     const z = (pz * refZ) / 100;
 
-    // 2. XYZ to linear sRGB mapping
     let r = x * 3.2406 + y * -1.5372 + z * -0.4986;
     let g = x * -0.9689 + y * 1.8758 + z * 0.0415;
     let b = x * 0.0557 + y * -0.204 + z * 1.057;
 
-    // 3. Re-apply standard gamma transformation curves
     r = r > 0.0031308 ? 1.055 * Math.pow(r, 1 / 2.4) - 0.055 : 12.92 * r;
     g = g > 0.0031308 ? 1.055 * Math.pow(g, 1 / 2.4) - 0.055 : 12.92 * g;
     b = b > 0.0031308 ? 1.055 * Math.pow(b, 1 / 2.4) - 0.055 : 12.92 * b;
@@ -329,7 +407,7 @@ export class PaintEngineService {
     };
   }
 
-  // Standard serialization trace helpers
+  // Standard serialization tracing helper functions
   private generateStageDataUrl(
     labels: Int32Array,
     palette: RGB[],
@@ -350,75 +428,6 @@ export class PaintEngineService {
       d[offset + 1] = color.g;
       d[offset + 2] = color.b;
       d[offset + 3] = 255;
-    }
-    ctx.putImageData(imgData, 0, 0);
-    return canvas.toDataURL();
-  }
-
-  private generateReductionStage(
-    labels: Int32Array,
-    palette: RGB[],
-    width: number,
-    height: number,
-    minArea: number,
-  ): string {
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d')!;
-    const imgData = ctx.createImageData(width, height);
-    const d = imgData.data;
-    const totalPixels = width * height;
-
-    const visited = new Uint8Array(totalPixels);
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const idx = y * width + x;
-        if (visited[idx]) continue;
-
-        const target = labels[idx];
-        const comp: number[] = [];
-        const q: number[] = [idx];
-        visited[idx] = 1;
-
-        while (q.length > 0) {
-          const curr = q.pop()!;
-          comp.push(curr);
-          const cx = curr % width;
-          const cy = Math.floor(curr / width);
-          const neighbors = [
-            { nx: cx + 1, ny: cy },
-            { nx: cx - 1, ny: cy },
-            { nx: cx, ny: cy + 1 },
-            { nx: cx, ny: cy - 1 },
-          ];
-          for (const n of neighbors) {
-            if (n.nx >= 0 && n.nx < width && n.ny >= 0 && n.ny < height) {
-              const nIdx = n.ny * width + n.nx;
-              if (!visited[nIdx] && labels[nIdx] === target) {
-                visited[nIdx] = 1;
-                q.push(nIdx);
-              }
-            }
-          }
-        }
-
-        const isNoise = comp.length < minArea;
-        for (const ci of comp) {
-          const offset = ci * 4;
-          if (isNoise) {
-            d[offset] = 255;
-            d[offset + 1] = 255;
-            d[offset + 2] = 255;
-          } else {
-            const color = palette[target];
-            d[offset] = color.r;
-            d[offset + 1] = color.g;
-            d[offset + 2] = color.b;
-          }
-          d[offset + 3] = 255;
-        }
-      }
     }
     ctx.putImageData(imgData, 0, 0);
     return canvas.toDataURL();
