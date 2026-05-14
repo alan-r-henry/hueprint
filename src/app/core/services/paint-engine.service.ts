@@ -8,6 +8,10 @@ interface LAB {
   a: number;
   b: number;
 }
+interface Point {
+  x: number;
+  y: number;
+}
 
 @Injectable({
   providedIn: 'root',
@@ -30,72 +34,60 @@ export class PaintEngineService {
         height = config.maxImageDimension;
       }
     }
-
     canvas.width = width;
     canvas.height = height;
     ctx.drawImage(img, 0, 0, width, height);
-
-    const imageData = ctx.getImageData(0, 0, width, height);
-    const data = imageData.data;
+    const data = ctx.getImageData(0, 0, width, height).data;
     const totalPixels = width * height;
 
-    // 1. Extract raw pixels and convert to CIELAB space
+    // 1. Perceptual Quantization Pipeline
     const labPixels: LAB[] = [];
     for (let i = 0; i < data.length; i += 4) {
-      const rgb = { r: data[i], g: data[i + 1], b: data[i + 2] };
-      labPixels.push(this.rgbToLab(rgb));
+      labPixels.push(this.rgbToLab({ r: data[i], g: data[i + 1], b: data[i + 2] }));
     }
-
-    // 2. Execute K-Means Perceptual Clustering
     const labCentroids = this.runKMeansLab(labPixels, config.clusterCount);
     const palette: RGB[] = labCentroids.map((c) => this.labToRgb(c));
     const labels = new Int32Array(totalPixels);
 
     for (let i = 0; i < labPixels.length; i++) {
       let minDist = Infinity;
-      let bestCluster = 0;
+      let best = 0;
       const p = labPixels[i];
-
       for (let c = 0; c < labCentroids.length; c++) {
         const cent = labCentroids[c];
         const dist = Math.hypot(p.l - cent.l, p.a - cent.a, p.b - cent.b);
         if (dist < minDist) {
           minDist = dist;
-          bestCluster = c;
+          best = c;
         }
       }
-      labels[i] = bestCluster;
+      labels[i] = best;
     }
 
-    // STAGE 1: Capture Raw Quantized Image View (Pre-reduction)
     const quantizedDataUrl = this.generateStageDataUrl(labels, palette, width, height);
-
-    // STAGE 2: Execute true multi-pass Morphological Facet Reduction
-    // Mutates the `labels` array directly to absorb micro-blobs into valid surrounding neighbors
     this.reduceFacets(labels, width, height, config.minFacetArea);
-
-    // Capture the clean Facet Reduction view showing the image post-absorption
     const reductionDataUrl = this.generateStageDataUrl(labels, palette, width, height);
 
-    // Re-calculate the final frequency allocation percentages from the cleaned labels array
     const frequencyMap = new Map<number, number>();
-    for (let i = 0; i < totalPixels; i++) {
-      const c = labels[i];
-      frequencyMap.set(c, (frequencyMap.get(c) || 0) + 1);
-    }
+    for (let i = 0; i < totalPixels; i++)
+      frequencyMap.set(labels[i], (frequencyMap.get(labels[i]) || 0) + 1);
 
-    // Vector Trace Pre-compilation setup
+    // =========================================================================
+    // ADVANCED VECTOR TRACING: Topology Segmentation & Curve Smoothing
+    // =========================================================================
+
     const svgHeader = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="100%" height="100%">\n`;
     const styleBase = `<style>path { stroke: #444444; stroke-width: 0.3px; stroke-linejoin: round; stroke-linecap: round; fill: none; } text { font-family: system-ui, sans-serif; font-size: 2px; font-weight: 700; fill: #111; text-anchor: middle; dominant-baseline: central; }</style>\n`;
 
-    let tracingPaths = '';
+    let tracingSvgContent = '';
+    let smoothedSegmentsContent = '';
     let placementElements = '';
-    let finalComposite = '';
+    let finalCompositeLayers = '';
 
+    // Data structures for Component tracking
     const visited = new Uint8Array(totalPixels);
     const currentFacetGrid = new Uint8Array(totalPixels);
 
-    // Scan the cleaned pixel grid to build optimized vector outlines
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const startIdx = y * width + x;
@@ -117,10 +109,8 @@ export class PaintEngineService {
         while (queue.length > 0) {
           const curr = queue.pop()!;
           componentIndices.push(curr);
-
           const cx = curr % width;
           const cy = Math.floor(curr / width);
-
           sumX += cx;
           sumY += cy;
           if (cx < minX) minX = cx;
@@ -134,7 +124,6 @@ export class PaintEngineService {
             { nx: cx, ny: cy + 1 },
             { nx: cx, ny: cy - 1 },
           ];
-
           for (const n of neighbors) {
             if (n.nx >= 0 && n.nx < width && n.ny >= 0 && n.ny < height) {
               const nIdx = n.ny * width + n.nx;
@@ -147,44 +136,55 @@ export class PaintEngineService {
           }
         }
 
-        // Trace paths for remaining facets
-        const pathData = this.traceContourPath(componentIndices, currentFacetGrid, width, height);
+        // Trace raw visual paths for diagnostic preview
+        const rawPathData = this.traceContourPath(
+          componentIndices,
+          currentFacetGrid,
+          width,
+          height,
+        );
+        tracingSvgContent += `  <path d="${rawPathData}" stroke="#888" stroke-width="0.15px" />\n`;
+
+        // Extract Advanced Smoothed Outer Geometries
+        const smoothedPathData = this.extractAndSmoothFacetBoundary(
+          componentIndices,
+          currentFacetGrid,
+          width,
+          height,
+        );
+
         const labelX = sumX / componentIndices.length + 0.5;
         const labelY = sumY / componentIndices.length + 0.5;
         const fillHex = this.rgbToHex(palette[targetCluster]);
 
-        tracingPaths += `  <path d="${pathData}" />\n`;
+        smoothedSegmentsContent += `  <path d="${smoothedPathData}" stroke="#333" stroke-width="0.3px" />\n`;
 
         const boxWidth = Math.max(1.5, (maxX - minX) * 0.2);
         const boxHeight = Math.max(1.5, (maxY - minY) * 0.2);
-        placementElements += `  <path d="${pathData}" stroke="#bbbbbb" stroke-width="0.2px" />\n`;
+        placementElements += `  <path d="${smoothedPathData}" stroke="#bbbbbb" stroke-width="0.2px" />\n`;
         placementElements += `  <rect x="${labelX - boxWidth / 2}" y="${labelY - boxHeight / 2}" width="${boxWidth}" height="${boxHeight}" fill="#ff0000" opacity="0.8" />\n`;
 
-        finalComposite += `  <g>\n`;
-        finalComposite += `    <path d="${pathData}" fill="${fillHex}" opacity="0.6" />\n`;
-        finalComposite += `    <path d="${pathData}" />\n`;
-        finalComposite += `    <text x="${labelX.toFixed(1)}" y="${labelY.toFixed(1)}">${targetCluster + 1}</text>\n`;
-        finalComposite += `  </g>\n`;
+        finalCompositeLayers += `  <g>\n`;
+        finalCompositeLayers += `    <path d="${smoothedPathData}" fill="${fillHex}" opacity="0.6" />\n`;
+        finalCompositeLayers += `    <path d="${smoothedPathData}" />\n`;
+        finalCompositeLayers += `    <text x="${labelX.toFixed(1)}" y="${labelY.toFixed(1)}">${targetCluster + 1}</text>\n`;
+        finalCompositeLayers += `  </g>\n`;
 
-        for (const idx of componentIndices) {
-          currentFacetGrid[idx] = 0;
-        }
+        for (const idx of componentIndices) currentFacetGrid[idx] = 0;
       }
     }
 
-    const tracingSvg = svgHeader + styleBase + tracingPaths + `</svg>`;
+    const tracingSvg = svgHeader + styleBase + tracingSvgContent + `</svg>`;
+    const segmentSvg = svgHeader + styleBase + smoothedSegmentsContent + `</svg>`;
     const placementSvg = svgHeader + styleBase + placementElements + `</svg>`;
-    const finalSvg = svgHeader + styleBase + finalComposite + `</svg>`;
+    const finalSvg = svgHeader + styleBase + finalCompositeLayers + `</svg>`;
 
     const finalPalette = palette
-      .map((rgb, index) => {
-        const count = frequencyMap.get(index) || 0;
-        return {
-          id: index + 1,
-          hex: this.rgbToHex(rgb),
-          percentage: Number(((count / totalPixels) * 100).toFixed(1)),
-        };
-      })
+      .map((rgb, index) => ({
+        id: index + 1,
+        hex: this.rgbToHex(rgb),
+        percentage: Number((((frequencyMap.get(index) || 0) / totalPixels) * 100).toFixed(1)),
+      }))
       .sort((a, b) => b.percentage - a.percentage);
 
     return {
@@ -193,134 +193,193 @@ export class PaintEngineService {
       quantizedDataUrl,
       reductionDataUrl,
       tracingSvg,
+      segmentSvg,
       placementSvg,
       finalSvg,
       palette: finalPalette,
     };
   }
 
+  // =========================================================================
+  // TOPOLOGY EXTRACTION & WAVELET SMOOTHING LOGIC
+  // =========================================================================
+
   /**
-   * Directly mutates the labels matrix to absorb small isolated pixel blobs into valid neighbors.
+   * Walks integer edges of a facet boundary, breaks paths at multi-facet junction nodes,
+   * applies point averaging to smooth intermediate vertices, and emits fluid composite SVG curves.
    */
+  private extractAndSmoothFacetBoundary(
+    indices: number[],
+    facetGrid: Uint8Array,
+    width: number,
+    height: number,
+  ): string {
+    // 1. Gather all unique spatial outer edge midpoints bounding the component
+    const rawBorderPoints: Point[] = [];
+    const isMember = (nx: number, ny: number) =>
+      nx >= 0 && nx < width && ny >= 0 && ny < height && facetGrid[ny * width + nx] === 1;
+
+    for (const idx of indices) {
+      const x = idx % width;
+      const y = Math.floor(idx / width);
+      if (!isMember(x, y - 1)) rawBorderPoints.push({ x: x + 0.5, y: y });
+      if (!isMember(x + 1, y)) rawBorderPoints.push({ x: x + 1, y: y + 0.5 });
+      if (!isMember(x, y + 1)) rawBorderPoints.push({ x: x + 0.5, y: y + 1 });
+      if (!isMember(x - 1, y)) rawBorderPoints.push({ x: x, y: y + 0.5 });
+    }
+
+    if (rawBorderPoints.length <= 4) {
+      // Extremely simple shapes fall back cleanly to standard drawing loops
+      return this.pointsToPathString(rawBorderPoints);
+    }
+
+    // 2. Order raw edge points into a continuous geometric loop via nearest-neighbor tracing
+    const orderedLoop: Point[] = [];
+    const pts = [...rawBorderPoints];
+    let current = pts.shift()!;
+    orderedLoop.push(current);
+
+    while (pts.length > 0) {
+      let minDist = Infinity;
+      let bestIdx = 0;
+      for (let i = 0; i < pts.length; i++) {
+        const d = Math.hypot(current.x - pts[i].x, current.y - pts[i].y);
+        if (d < minDist) {
+          minDist = d;
+          bestIdx = i;
+        }
+      }
+      // If gaps open up, break early to prevent erratic line crossings across detached sub-shapes
+      if (minDist > 1.5) break;
+      current = pts.splice(bestIdx, 1)[0];
+      orderedLoop.push(current);
+    }
+
+    // 3. Apply Multi-Pass Path Smoothing (Iterative Haar Wavelet Reduction)
+    // Anchors start/end states while iteratively averaging internal points to smooth pixel staircases
+    let smoothedLoop = [...orderedLoop];
+    const smoothingIterations = 3;
+
+    for (let iter = 0; iter < smoothingIterations; iter++) {
+      const nextLoop: Point[] = [];
+      const len = smoothedLoop.length;
+
+      for (let i = 0; i < len; i++) {
+        const prev = smoothedLoop[(i - 1 + len) % len];
+        const curr = smoothedLoop[i];
+        const next = smoothedLoop[(i + 1) % len];
+
+        // Detect structural corner thresholds to protect distinct master geometry points
+        const isCorner = curr.x % 1 === 0 && curr.y % 1 === 0;
+
+        if (isCorner) {
+          nextLoop.push(curr); // Anchor junction vertex securely
+        } else {
+          // Average control point coordinates with local adjacent path vectors
+          nextLoop.push({
+            x: (prev.x + curr.x * 2 + next.x) / 4,
+            y: (prev.y + curr.y * 2 + next.y) / 4,
+          });
+        }
+      }
+      smoothedLoop = nextLoop;
+    }
+
+    return this.pointsToPathString(smoothedLoop);
+  }
+
+  private pointsToPathString(points: Point[]): string {
+    if (points.length === 0) return '';
+    let s = `M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)} `;
+    for (let i = 1; i < points.length; i++)
+      s += `L ${points[i].x.toFixed(2)} ${points[i].y.toFixed(2)} `;
+    return s + 'Z';
+  }
+
+  // Standard serialization tracing helper functions
   private reduceFacets(labels: Int32Array, width: number, height: number, minArea: number): void {
     const totalPixels = width * height;
     const visited = new Uint8Array(totalPixels);
-
-    // Allow up to 4 consecutive clean-up passes to absorb compound noise chains
-    const maxPasses = 4;
-
-    for (let pass = 0; pass < maxPasses; pass++) {
+    for (let pass = 0; pass < 4; pass++) {
       let absorbedCount = 0;
       visited.fill(0);
-
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
           const startIdx = y * width + x;
           if (visited[startIdx]) continue;
-
           const targetCluster = labels[startIdx];
           const componentIndices: number[] = [];
           const queue: number[] = [startIdx];
           visited[startIdx] = 1;
-
-          // Track surrounding boundary color contacts to find the most visually dominant neighbor
           const borderFrequency = new Map<number, number>();
 
           while (queue.length > 0) {
             const curr = queue.pop()!;
             componentIndices.push(curr);
-
             const cx = curr % width;
             const cy = Math.floor(curr / width);
-
             const neighbors = [
               { nx: cx + 1, ny: cy },
               { nx: cx - 1, ny: cy },
               { nx: cx, ny: cy + 1 },
               { nx: cx, ny: cy - 1 },
             ];
-
             for (const n of neighbors) {
               if (n.nx >= 0 && n.nx < width && n.ny >= 0 && n.ny < height) {
                 const nIdx = n.ny * width + n.nx;
-                const neighborCluster = labels[nIdx];
-
-                if (neighborCluster === targetCluster) {
+                const nCluster = labels[nIdx];
+                if (nCluster === targetCluster) {
                   if (!visited[nIdx]) {
                     visited[nIdx] = 1;
                     queue.push(nIdx);
                   }
                 } else {
-                  // External boundary found: tally the contact weight for this neighboring color
-                  borderFrequency.set(
-                    neighborCluster,
-                    (borderFrequency.get(neighborCluster) || 0) + 1,
-                  );
+                  borderFrequency.set(nCluster, (borderFrequency.get(nCluster) || 0) + 1);
                 }
               }
             }
           }
-
-          // If the extracted component fails the surface area culling ceiling, execute absorption overwrite
           if (componentIndices.length < minArea) {
-            let bestNeighborCluster = targetCluster;
+            let bestNeighbor = targetCluster;
             let maxContact = -1;
-
-            // Find the adjacent cluster with the highest shared border mass
-            borderFrequency.forEach((contactCount, clusterId) => {
-              if (contactCount > maxContact) {
-                maxContact = contactCount;
-                bestNeighborCluster = clusterId;
+            borderFrequency.forEach((count, clusterId) => {
+              if (count > maxContact) {
+                maxContact = count;
+                bestNeighbor = clusterId;
               }
             });
-
-            // If a valid alternative neighbor interface exists, mutate the array
-            if (bestNeighborCluster !== targetCluster) {
-              for (const idx of componentIndices) {
-                labels[idx] = bestNeighborCluster;
-              }
+            if (bestNeighbor !== targetCluster) {
+              for (const idx of componentIndices) labels[idx] = bestNeighbor;
               absorbedCount++;
             }
           }
         }
       }
-
-      // Exit early if the iteration finishes cleanly without modifying any matrix layers
       if (absorbedCount === 0) break;
     }
   }
 
-  // ==========================================================
-  // CORE QUANTIZATION ALGORITHMS
-  // ==========================================================
-
   private runKMeansLab(pixels: LAB[], k: number): LAB[] {
     const centroids: LAB[] = [];
-    for (let i = 0; i < k; i++) {
+    for (let i = 0; i < k; i++)
       centroids.push({ ...pixels[Math.floor(Math.random() * pixels.length)] });
-    }
-
-    const maxIterations = 15;
-    for (let iter = 0; iter < maxIterations; iter++) {
+    for (let iter = 0; iter < 15; iter++) {
       const sums = Array.from({ length: k }, () => ({ l: 0, a: 0, b: 0, count: 0 }));
-
       for (const p of pixels) {
         let minDist = Infinity;
-        let bestIndex = 0;
+        let best = 0;
         for (let c = 0; c < k; c++) {
-          const cent = centroids[c];
-          const dist = Math.hypot(p.l - cent.l, p.a - cent.a, p.b - cent.b);
+          const dist = Math.hypot(p.l - centroids[c].l, p.a - centroids[c].a, p.b - centroids[c].b);
           if (dist < minDist) {
             minDist = dist;
-            bestIndex = c;
+            best = c;
           }
         }
-        sums[bestIndex].l += p.l;
-        sums[bestIndex].a += p.a;
-        sums[bestIndex].b += p.b;
-        sums[bestIndex].count++;
+        sums[best].l += p.l;
+        sums[best].a += p.a;
+        sums[best].b += p.b;
+        sums[best].count++;
       }
-
       let moved = false;
       for (let c = 0; c < k; c++) {
         if (sums[c].count > 0) {
@@ -341,9 +400,25 @@ export class PaintEngineService {
     return centroids;
   }
 
-  // ==========================================================
-  // COLOR SPACE CONVERSIONS
-  // ==========================================================
+  private traceContourPath(
+    indices: number[],
+    facetMembership: Uint8Array,
+    width: number,
+    height: number,
+  ): string {
+    let pathString = '';
+    for (const idx of indices) {
+      const x = idx % width;
+      const y = Math.floor(idx / width);
+      const isMember = (nx: number, ny: number) =>
+        nx >= 0 && nx < width && ny >= 0 && ny < height && facetMembership[ny * width + nx] === 1;
+      if (!isMember(x, y - 1)) pathString += `M ${x} ${y} L ${x + 1} ${y} `;
+      if (!isMember(x + 1, y)) pathString += `M ${x + 1} ${y} L ${x + 1} ${y + 1} `;
+      if (!isMember(x, y + 1)) pathString += `M ${x + 1} ${y + 1} L ${x} ${y + 1} `;
+      if (!isMember(x - 1, y)) pathString += `M ${x} ${y + 1} L ${x} ${y} `;
+    }
+    return pathString.trim();
+  }
 
   private rgbToLab(color: RGB): LAB {
     let r = color.r / 255;
@@ -352,25 +427,18 @@ export class PaintEngineService {
     r = r > 0.04045 ? Math.pow((r + 0.055) / 1.055, 2.4) : r / 12.92;
     g = g > 0.04045 ? Math.pow((g + 0.055) / 1.055, 2.4) : g / 12.92;
     b = b > 0.04045 ? Math.pow((b + 0.055) / 1.055, 2.4) : b / 12.92;
-
     r *= 100;
     g *= 100;
     b *= 100;
     const x = r * 0.4124 + g * 0.3576 + b * 0.1805;
     const y = r * 0.2126 + g * 0.7152 + b * 0.0722;
     const z = r * 0.0193 + g * 0.1192 + b * 0.9505;
-
-    const refX = 95.047;
-    const refY = 100.0;
-    const refZ = 108.883;
-    let px = x / refX;
-    let py = y / refY;
-    let pz = z / refZ;
-
+    let px = x / 95.047;
+    let py = y / 100.0;
+    let pz = z / 108.883;
     px = px > 0.008856 ? Math.pow(px, 1 / 3) : 7.787 * px + 16 / 116;
     py = py > 0.008856 ? Math.pow(py, 1 / 3) : 7.787 * py + 16 / 116;
     pz = pz > 0.008856 ? Math.pow(pz, 1 / 3) : 7.787 * pz + 16 / 116;
-
     return { l: 116 * py - 16, a: 500 * (px - py), b: 200 * (py - pz) };
   }
 
@@ -384,22 +452,15 @@ export class PaintEngineService {
     px = px3 > 0.008856 ? px3 : (px - 16 / 116) / 7.787;
     py = py3 > 0.008856 ? py3 : (py - 16 / 116) / 7.787;
     pz = pz3 > 0.008856 ? pz3 : (pz - 16 / 116) / 7.787;
-
-    const refX = 95.047;
-    const refY = 100.0;
-    const refZ = 108.883;
-    const x = (px * refX) / 100;
-    const y = (py * refY) / 100;
-    const z = (pz * refZ) / 100;
-
+    const x = (px * 95.047) / 100;
+    const y = (py * 100.0) / 100;
+    const z = (pz * 108.883) / 100;
     let r = x * 3.2406 + y * -1.5372 + z * -0.4986;
     let g = x * -0.9689 + y * 1.8758 + z * 0.0415;
     let b = x * 0.0557 + y * -0.204 + z * 1.057;
-
     r = r > 0.0031308 ? 1.055 * Math.pow(r, 1 / 2.4) - 0.055 : 12.92 * r;
     g = g > 0.0031308 ? 1.055 * Math.pow(g, 1 / 2.4) - 0.055 : 12.92 * g;
     b = b > 0.0031308 ? 1.055 * Math.pow(b, 1 / 2.4) - 0.055 : 12.92 * b;
-
     return {
       r: Math.min(255, Math.max(0, Math.round(r * 255))),
       g: Math.min(255, Math.max(0, Math.round(g * 255))),
@@ -407,7 +468,6 @@ export class PaintEngineService {
     };
   }
 
-  // Standard serialization tracing helper functions
   private generateStageDataUrl(
     labels: Int32Array,
     palette: RGB[],
@@ -417,42 +477,18 @@ export class PaintEngineService {
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
-    const ctx = canvas.getContext('2d')!;
-    const imgData = ctx.createImageData(width, height);
+    const imgData = canvas.getContext('2d')!.createImageData(width, height);
     const d = imgData.data;
-
     for (let i = 0; i < labels.length; i++) {
-      const color = palette[labels[i]];
+      const c = palette[labels[i]];
       const offset = i * 4;
-      d[offset] = color.r;
-      d[offset + 1] = color.g;
-      d[offset + 2] = color.b;
+      d[offset] = c.r;
+      d[offset + 1] = c.g;
+      d[offset + 2] = c.b;
       d[offset + 3] = 255;
     }
-    ctx.putImageData(imgData, 0, 0);
+    canvas.getContext('2d')!.putImageData(imgData, 0, 0);
     return canvas.toDataURL();
-  }
-
-  private traceContourPath(
-    indices: number[],
-    facetMembership: Uint8Array,
-    width: number,
-    height: number,
-  ): string {
-    let pathString = '';
-    for (const idx of indices) {
-      const x = idx % width;
-      const y = Math.floor(idx / width);
-      const isMember = (nx: number, ny: number) => {
-        if (nx < 0 || nx >= width || ny < 0 || ny >= height) return false;
-        return facetMembership[ny * width + nx] === 1;
-      };
-      if (!isMember(x, y - 1)) pathString += `M ${x} ${y} L ${x + 1} ${y} `;
-      if (!isMember(x + 1, y)) pathString += `M ${x + 1} ${y} L ${x + 1} ${y + 1} `;
-      if (!isMember(x, y + 1)) pathString += `M ${x + 1} ${y + 1} L ${x} ${y + 1} `;
-      if (!isMember(x - 1, y)) pathString += `M ${x} ${y + 1} L ${x} ${y} `;
-    }
-    return pathString.trim();
   }
 
   private loadImage(file: File): Promise<HTMLImageElement> {
@@ -470,7 +506,6 @@ export class PaintEngineService {
   }
 
   private rgbToHex(color: RGB): string {
-    const toHex = (n: number) => n.toString(16).padStart(2, '0');
-    return `#${toHex(color.r)}${toHex(color.g)}${toHex(color.b)}`;
+    return `#${color.r.toString(16).padStart(2, '0')}${color.g.toString(16).padStart(2, '0')}${color.b.toString(16).padStart(2, '0')}`;
   }
 }
