@@ -23,6 +23,7 @@ export class PaintEngineService {
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) throw new Error('Failed to access 2D context');
 
+    // strictly enforce downsampling limits while locking native image ratios
     let width = img.width;
     let height = img.height;
     if (width > config.maxImageDimension || height > config.maxImageDimension) {
@@ -41,7 +42,7 @@ export class PaintEngineService {
     const data = ctx.getImageData(0, 0, width, height).data;
     const totalPixels = width * height;
 
-    // Perceptual Quantization Pipeline (CIELAB Space)
+    // Perceptual CIELAB Color Space Quantization
     const labPixels: LAB[] = [];
     for (let i = 0; i < data.length; i += 4) {
       labPixels.push(this.rgbToLab({ r: data[i], g: data[i + 1], b: data[i + 2] }));
@@ -76,7 +77,8 @@ export class PaintEngineService {
     }
 
     const svgHeader = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" width="100%" height="100%">\n`;
-    const styleBase = `<style>path { stroke: #444444; stroke-width: 0.3px; stroke-linejoin: round; stroke-linecap: round; fill: none; } text { font-family: system-ui, sans-serif; font-size: 2px; font-weight: 700; fill: #111; text-anchor: middle; dominant-baseline: central; }</style>\n`;
+    // Strip fixed font-size strings from baseline styles to allow inline programmatic text scaling
+    const styleBase = `<style>path { stroke: #444444; stroke-width: 0.3px; stroke-linejoin: round; stroke-linecap: round; fill: none; } text { font-family: system-ui, sans-serif; font-weight: 700; fill: #111; text-anchor: middle; dominant-baseline: central; }</style>\n`;
 
     let tracingSvgContent = '';
     let smoothedSegmentsContent = '';
@@ -98,8 +100,6 @@ export class PaintEngineService {
         visited[startIdx] = 1;
         currentFacetGrid[startIdx] = 1;
 
-        let sumX = 0;
-        let sumY = 0;
         let minX = x,
           maxX = x,
           minY = y,
@@ -110,8 +110,7 @@ export class PaintEngineService {
           componentIndices.push(curr);
           const cx = curr % width;
           const cy = Math.floor(curr / width);
-          sumX += cx;
-          sumY += cy;
+
           if (cx < minX) minX = cx;
           if (cx > maxX) maxX = cx;
           if (cy < minY) minY = cy;
@@ -136,7 +135,7 @@ export class PaintEngineService {
           }
         }
 
-        // Trace raw diagnostic integer contours
+        // Trace un-smoothed integer contours
         const rawPathData = this.traceContourPath(
           componentIndices,
           currentFacetGrid,
@@ -147,7 +146,7 @@ export class PaintEngineService {
           tracingSvgContent += `  <path d="${rawPathData}" stroke="#888" stroke-width="0.15px" />\n`;
         }
 
-        // Extract Advanced Smoothed Planar Outlines using global label checking to find true multi-color junctions
+        // Extract Wavelet-smoothed shared border segments
         const smoothedPathData = this.extractAndSmoothFacetBoundary(
           componentIndices,
           currentFacetGrid,
@@ -157,25 +156,45 @@ export class PaintEngineService {
         );
 
         if (smoothedPathData) {
-          const labelX = sumX / componentIndices.length + 0.5;
-          const labelY = sumY / componentIndices.length + 0.5;
           const fillHex = this.rgbToHex(palette[targetCluster]);
-
           smoothedSegmentsContent += `  <path d="${smoothedPathData}" stroke="#333" stroke-width="0.3px" />\n`;
 
-          const boxWidth = Math.max(1.5, (maxX - minX) * 0.2);
-          const boxHeight = Math.max(1.5, (maxY - minY) * 0.2);
+          // =====================================================================
+          // CRITICAL FEATURE: Maximum Inscribed Square Label Placement
+          // =====================================================================
+          // Calculate the optimal internal bounding box using distance transformation
+          const labelBox = this.findMaximumInscribedSquare(
+            componentIndices,
+            currentFacetGrid,
+            minX,
+            minY,
+            maxX,
+            maxY,
+            width,
+          );
 
+          // Calculate precise midpoint vector anchors centered inside the target square
+          const labelX = labelBox.x + labelBox.size / 2;
+          const labelY = labelBox.y + labelBox.size / 2;
+
+          // Apply proportional padding scale factor ensuring text fits cleanly without colliding with borders
+          // Clamp absolute minimum rendering sizes to ensure micro-facets remain identifiable
+          const calculatedFontSize = Math.max(1.2, Number((labelBox.size * 0.65).toFixed(2)));
+
+          // Render diagnostic placement bounds (Visualizing exactly how inscribed boxes fit inside complex blobs)
           placementElements += `  <path d="${smoothedPathData}" stroke="#bbbbbb" stroke-width="0.2px" />\n`;
-          placementElements += `  <rect x="${labelX - boxWidth / 2}" y="${labelY - boxHeight / 2}" width="${boxWidth}" height="${boxHeight}" fill="#ff0000" opacity="0.8" />\n`;
+          placementElements += `  <rect x="${labelBox.x}" y="${labelBox.y}" width="${labelBox.size}" height="${labelBox.size}" fill="#ff0000" opacity="0.4" stroke="#cc0000" stroke-width="0.2px" />\n`;
+          placementElements += `  <circle cx="${labelX}" cy="${labelY}" r="0.4" fill="#0000ff" />\n`;
 
+          // Compile Master SVG Layer Output featuring inline dynamically scaled font configurations
           finalCompositeLayers += `  <g>\n`;
           finalCompositeLayers += `    <path d="${smoothedPathData}" fill="${fillHex}" fill-rule="evenodd" opacity="0.6" />\n`;
           finalCompositeLayers += `    <path d="${smoothedPathData}" />\n`;
-          finalCompositeLayers += `    <text x="${labelX.toFixed(1)}" y="${labelY.toFixed(1)}">${targetCluster + 1}</text>\n`;
+          finalCompositeLayers += `    <text x="${labelX.toFixed(2)}" y="${labelY.toFixed(2)}" font-size="${calculatedFontSize}px">${targetCluster + 1}</text>\n`;
           finalCompositeLayers += `  </g>\n`;
         }
 
+        // Clean lookup maps cleanly for the next shape extraction
         for (const idx of componentIndices) {
           currentFacetGrid[idx] = 0;
         }
@@ -209,6 +228,93 @@ export class PaintEngineService {
   }
 
   // =========================================================================
+  // DISTANCE TRANSFORM & MAXIMUM INSCRIBED SQUARE SEARCH LOGIC
+  // =========================================================================
+
+  /**
+   * Scans a localized component matrix to isolate the maximum viable internal square ($S \times S$)
+   * where all internal pixels strictly belong to the current target facet.
+   */
+  private findMaximumInscribedSquare(
+    indices: number[],
+    facetGrid: Uint8Array,
+    minX: number,
+    minY: number,
+    maxX: number,
+    maxY: number,
+    masterWidth: number,
+  ): { x: number; y: number; size: number } {
+    const boxW = maxX - minX + 1;
+    const boxH = maxY - minY + 1;
+
+    // 1. Allocate a localized lookup grid representing the active bounding box
+    const localGrid = new Uint8Array(boxW * boxH);
+    for (const idx of indices) {
+      const lx = (idx % masterWidth) - minX;
+      const ly = Math.floor(idx / masterWidth) - minY;
+      localGrid[ly * boxW + lx] = 1;
+    }
+
+    // 2. Dynamic Programming Square Expansion (Maximal Square Matrix algorithm)
+    // dp[y][x] stores the side length of the largest valid square whose bottom-right corner is at (x, y)
+    const dp = new Int32Array(boxW * boxH);
+    let maxSize = 0;
+    let bestX = 0;
+    let bestY = 0;
+
+    for (let y = 0; y < boxH; y++) {
+      for (let x = 0; x < boxW; x++) {
+        const idx = y * boxW + x;
+
+        if (localGrid[idx] === 1) {
+          if (x === 0 || y === 0) {
+            dp[idx] = 1;
+          } else {
+            // Expand square safely by taking the minimum valid expansion boundaries of adjacent top/left cells
+            const valTop = dp[(y - 1) * boxW + x];
+            const valLeft = dp[y * boxW + (x - 1)];
+            const valTopLeft = dp[(y - 1) * boxW + (x - 1)];
+
+            dp[idx] = Math.min(valTop, valLeft, valTopLeft) + 1;
+          }
+
+          // Track the coordinates yielding the absolute maximal viable interior surface dimensions
+          if (dp[idx] > maxSize) {
+            maxSize = dp[idx];
+            bestX = x;
+            bestY = y;
+          }
+        }
+      }
+    }
+
+    // If the region is extremely small or thin, fall back cleanly to calculated visual center-of-mass bounds
+    if (maxSize <= 1) {
+      let sumX = 0,
+        sumY = 0;
+      for (const idx of indices) {
+        sumX += idx % masterWidth;
+        sumY += Math.floor(idx / masterWidth);
+      }
+      return {
+        x: Number((sumX / indices.length).toFixed(2)),
+        y: Number((sumY / indices.length).toFixed(2)),
+        size: 1.5, // Secure fallback sizing perimeter
+      };
+    }
+
+    // Calculate absolute root rendering origin (Top-Left corner derived from Bottom-Right target states)
+    const finalTopLeftX = bestX - maxSize + 1 + minX;
+    const finalTopLeftY = bestY - maxSize + 1 + minY;
+
+    return {
+      x: finalTopLeftX,
+      y: finalTopLeftY,
+      size: maxSize,
+    };
+  }
+
+  // =========================================================================
   // BORDER TRACING LOGIC
   // =========================================================================
 
@@ -237,14 +343,9 @@ export class PaintEngineService {
   }
 
   // =========================================================================
-  // CRITICAL FIX: TRUE PLANAR SEGMENTATION & WAVELET SMOOTHING
+  // PLANAR SEGMENTATION & WAVELET SMOOTHING LOGIC
   // =========================================================================
 
-  /**
-   * Evaluates vertex paths globally. Identifies true multi-color junction points where
-   * multiple cluster IDs intersect, and averages internal segment nodes cleanly to achieve
-   * fluid vector smoothing while preserving shared border geometry perfectly.
-   */
   private extractAndSmoothFacetBoundary(
     indices: number[],
     facetGrid: Uint8Array,
@@ -262,7 +363,6 @@ export class PaintEngineService {
     const isMember = (nx: number, ny: number) =>
       nx >= 0 && nx < width && ny >= 0 && ny < height && facetGrid[ny * width + nx] === 1;
 
-    // Extract outer unit perimeter segments excluding layout borders
     for (const idx of indices) {
       const x = idx % width;
       const y = Math.floor(idx / width);
@@ -276,7 +376,6 @@ export class PaintEngineService {
 
     if (segments.length === 0) return '';
 
-    // Chain contiguous unit vectors endpoint-to-endpoint into maximal raw path loops
     const chains: Point[][] = [];
     const used = new Uint8Array(segments.length);
 
@@ -322,12 +421,8 @@ export class PaintEngineService {
       if (currentChain.length > 2) chains.push(currentChain);
     }
 
-    // Helper: Evaluates true multi-facet connectivity around a target integer grid vertex
     const isTrueJunction = (pt: Point): boolean => {
-      // Points sitting on the layout perimeter are automatically treated as terminal anchors
       if (pt.x <= 0 || pt.x >= width || pt.y <= 0 || pt.y >= height) return true;
-
-      // Gather unique color IDs from the 4 specific pixel quadrants sharing this corner vertex
       const uniqueColors = new Set<number>();
       const quadrants = [
         { cx: pt.x - 1, cy: pt.y - 1 },
@@ -335,19 +430,15 @@ export class PaintEngineService {
         { cx: pt.x - 1, cy: pt.y },
         { cx: pt.x, cy: pt.y },
       ];
-
       for (const q of quadrants) {
-        if (q.cx >= 0 && q.cx < width && q.cy >= 0 && q.cy < height) {
+        if (q.cx >= 0 && q.cx < width && q.cy >= 0 && q.cy < height)
           uniqueColors.add(globalLabels[q.cy * width + q.cx]);
-        }
       }
-      // A vertex is a true junction if three or more distinct visual color zones meet at this coordinate
       return uniqueColors.size >= 3;
     };
 
     let masterPathString = '';
 
-    // Apply Multi-Pass Wavelet Averaging strictly protecting isolated multi-color junction nodes
     for (const chain of chains) {
       const isClosed =
         chain[0].x === chain[chain.length - 1].x && chain[0].y === chain[chain.length - 1].y;
@@ -359,26 +450,20 @@ export class PaintEngineService {
         const len = smoothedChain.length;
 
         for (let i = 0; i < len; i++) {
-          // Terminal endpoints of open paths remain locked securely
           if (!isClosed && (i === 0 || i === len - 1)) {
             nextChain.push(smoothedChain[i]);
             continue;
           }
-
           const prev = smoothedChain[(i - 1 + len) % len];
           const curr = smoothedChain[i];
           const next = smoothedChain[(i + 1) % len];
 
-          // CRITICAL FIX: Only freeze nodes that act as true multi-color planar interfaces
-          if (isTrueJunction(curr)) {
-            nextChain.push(curr);
-          } else {
-            // Apply Haar Wavelet localized point-averaging to soften pixel staircase segments
+          if (isTrueJunction(curr)) nextChain.push(curr);
+          else
             nextChain.push({
               x: (prev.x + curr.x * 2 + next.x) / 4,
               y: (prev.y + curr.y * 2 + next.y) / 4,
             });
-          }
         }
         smoothedChain = nextChain;
       }
@@ -391,14 +476,13 @@ export class PaintEngineService {
   private pointsToPathString(points: Point[], isClosed: boolean): string {
     if (points.length < 2) return '';
     let s = `M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)} `;
-    for (let i = 1; i < points.length; i++) {
+    for (let i = 1; i < points.length; i++)
       s += `L ${points[i].x.toFixed(2)} ${points[i].y.toFixed(2)} `;
-    }
     return isClosed ? s + 'Z' : s;
   }
 
   // =========================================================================
-  // CORE MORPHOLOGY & CLUSTERING LOGIC
+  // CORE QUANTIZATION & COLOR SPACE MATH
   // =========================================================================
 
   private reduceFacets(labels: Int32Array, width: number, height: number, minArea: number): void {
