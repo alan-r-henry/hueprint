@@ -23,10 +23,13 @@ export class GeneratorComponent {
   resultData = signal<GenerationResult | null>(null);
 
   // Active Stage Navigation Pointers
-  activeTab = signal<'quantized' | 'reduction' | 'tracing' | 'placement' | 'final'>('final');
+  activeTab = signal<'quantized' | 'reduction' | 'tracing' | 'segments' | 'placement' | 'final'>(
+    'final',
+  );
 
   // Sanitized string wrappers
   safeTracingSvg = signal<SafeHtml | null>(null);
+  safeSegmentSvg = signal<SafeHtml | null>(null); // <-- Added safe binder
   safePlacementSvg = signal<SafeHtml | null>(null);
   safeFinalSvg = signal<SafeHtml | null>(null);
 
@@ -53,25 +56,26 @@ export class GeneratorComponent {
     this.config.update((curr) => ({ ...curr, [key]: value }));
   }
 
-  setActiveTab(tab: 'quantized' | 'reduction' | 'tracing' | 'placement' | 'final'): void {
+  setActiveTab(
+    tab: 'quantized' | 'reduction' | 'tracing' | 'segments' | 'placement' | 'final',
+  ): void {
     this.activeTab.set(tab);
   }
-
   async generateCanvas(): Promise<void> {
     const file = this.selectedFile();
     if (!file) return;
-
     this.isProcessing.set(true);
     try {
       const res = await this.paintEngine.processImage(file, this.config());
       this.resultData.set(res);
       this.safeTracingSvg.set(this.sanitizer.bypassSecurityTrustHtml(res.tracingSvg));
+      this.safeSegmentSvg.set(this.sanitizer.bypassSecurityTrustHtml(res.segmentSvg)); // <-- Map output pipeline layer
       this.safePlacementSvg.set(this.sanitizer.bypassSecurityTrustHtml(res.placementSvg));
       this.safeFinalSvg.set(this.sanitizer.bypassSecurityTrustHtml(res.finalSvg));
-      this.activeTab.set('final'); // Open master preview by default
+      this.activeTab.set('final');
     } catch (error) {
       console.error('Generation Error:', error);
-      alert('Processing thread overload. Downsample constraints activated.');
+      alert('Processing overload. Execution threads scaled down.');
     } finally {
       this.isProcessing.set(false);
     }

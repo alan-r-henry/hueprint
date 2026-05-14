@@ -122,6 +122,14 @@
             </button>
             <button
               class="tab-btn"
+              [class.active]="activeTab() === 'segments'"
+              [disabled]="!resultData()"
+              (click)="setActiveTab('segments')"
+            >
+              Border Segments
+            </button>
+            <button
+              class="tab-btn"
               [class.active]="activeTab() === 'placement'"
               [disabled]="!resultData()"
               (click)="setActiveTab('placement')"
@@ -160,6 +168,8 @@
               </div>
             } @else if (activeTab() === 'tracing') {
               <div class="svg-container" [innerHTML]="safeTracingSvg()"></div>
+            } @else if (activeTab() === 'segments') {
+              <div class="svg-container" [innerHTML]="safeSegmentSvg()"></div>
             } @else if (activeTab() === 'placement') {
               <div class="svg-container" [innerHTML]="safePlacementSvg()"></div>
             } @else if (activeTab() === 'final') {

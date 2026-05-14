@@ -15,15 +15,13 @@ export interface GeneratorConfig {
 export interface GenerationResult {
   width: number;
   height: number;
-  // 1. Quantized Canvas Stage DataURL
   quantizedDataUrl: string;
-  // 2. Facet Reduction Map DataURL
   reductionDataUrl: string;
-  // 3. Raw SVG Traced Outlines String
+  // Raw integer-step tracing view
   tracingSvg: string;
-  // 4. Bounding Box & Centroid Inaccessibility SVG Map
+  // Smoothed Wavelet border segments view
+  segmentSvg: string;
   placementSvg: string;
-  // 5. Final Master SVG String
   finalSvg: string;
   palette: { id: number; hex: string; percentage: number }[];
 }
