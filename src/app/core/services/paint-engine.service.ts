@@ -21,7 +21,7 @@ export class PaintEngineService {
     const img = await this.loadImage(file);
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    if (!ctx) throw new Error('Failed to get 2D context');
+    if (!ctx) throw new Error('Failed to access 2D context');
 
     let width = img.width;
     let height = img.height;
@@ -34,17 +34,19 @@ export class PaintEngineService {
         height = config.maxImageDimension;
       }
     }
+
     canvas.width = width;
     canvas.height = height;
     ctx.drawImage(img, 0, 0, width, height);
     const data = ctx.getImageData(0, 0, width, height).data;
     const totalPixels = width * height;
 
-    // 1. Perceptual Quantization Pipeline
+    // Perceptual Quantization Pipeline (CIELAB Space)
     const labPixels: LAB[] = [];
     for (let i = 0; i < data.length; i += 4) {
       labPixels.push(this.rgbToLab({ r: data[i], g: data[i + 1], b: data[i + 2] }));
     }
+
     const labCentroids = this.runKMeansLab(labPixels, config.clusterCount);
     const palette: RGB[] = labCentroids.map((c) => this.labToRgb(c));
     const labels = new Int32Array(totalPixels);
@@ -69,14 +71,11 @@ export class PaintEngineService {
     const reductionDataUrl = this.generateStageDataUrl(labels, palette, width, height);
 
     const frequencyMap = new Map<number, number>();
-    for (let i = 0; i < totalPixels; i++)
+    for (let i = 0; i < totalPixels; i++) {
       frequencyMap.set(labels[i], (frequencyMap.get(labels[i]) || 0) + 1);
+    }
 
-    // =========================================================================
-    // ADVANCED VECTOR TRACING: Topology Segmentation & Curve Smoothing
-    // =========================================================================
-
-    const svgHeader = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="100%" height="100%">\n`;
+    const svgHeader = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" width="100%" height="100%">\n`;
     const styleBase = `<style>path { stroke: #444444; stroke-width: 0.3px; stroke-linejoin: round; stroke-linecap: round; fill: none; } text { font-family: system-ui, sans-serif; font-size: 2px; font-weight: 700; fill: #111; text-anchor: middle; dominant-baseline: central; }</style>\n`;
 
     let tracingSvgContent = '';
@@ -84,10 +83,10 @@ export class PaintEngineService {
     let placementElements = '';
     let finalCompositeLayers = '';
 
-    // Data structures for Component tracking
     const visited = new Uint8Array(totalPixels);
     const currentFacetGrid = new Uint8Array(totalPixels);
 
+    // Connected Component Extraction
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const startIdx = y * width + x;
@@ -124,6 +123,7 @@ export class PaintEngineService {
             { nx: cx, ny: cy + 1 },
             { nx: cx, ny: cy - 1 },
           ];
+
           for (const n of neighbors) {
             if (n.nx >= 0 && n.nx < width && n.ny >= 0 && n.ny < height) {
               const nIdx = n.ny * width + n.nx;
@@ -136,41 +136,49 @@ export class PaintEngineService {
           }
         }
 
-        // Trace raw visual paths for diagnostic preview
+        // Trace raw diagnostic integer contours
         const rawPathData = this.traceContourPath(
           componentIndices,
           currentFacetGrid,
           width,
           height,
         );
-        tracingSvgContent += `  <path d="${rawPathData}" stroke="#888" stroke-width="0.15px" />\n`;
+        if (rawPathData) {
+          tracingSvgContent += `  <path d="${rawPathData}" stroke="#888" stroke-width="0.15px" />\n`;
+        }
 
-        // Extract Advanced Smoothed Outer Geometries
+        // Extract Advanced Smoothed Planar Outlines using global label checking to find true multi-color junctions
         const smoothedPathData = this.extractAndSmoothFacetBoundary(
           componentIndices,
           currentFacetGrid,
+          labels,
           width,
           height,
         );
 
-        const labelX = sumX / componentIndices.length + 0.5;
-        const labelY = sumY / componentIndices.length + 0.5;
-        const fillHex = this.rgbToHex(palette[targetCluster]);
+        if (smoothedPathData) {
+          const labelX = sumX / componentIndices.length + 0.5;
+          const labelY = sumY / componentIndices.length + 0.5;
+          const fillHex = this.rgbToHex(palette[targetCluster]);
 
-        smoothedSegmentsContent += `  <path d="${smoothedPathData}" stroke="#333" stroke-width="0.3px" />\n`;
+          smoothedSegmentsContent += `  <path d="${smoothedPathData}" stroke="#333" stroke-width="0.3px" />\n`;
 
-        const boxWidth = Math.max(1.5, (maxX - minX) * 0.2);
-        const boxHeight = Math.max(1.5, (maxY - minY) * 0.2);
-        placementElements += `  <path d="${smoothedPathData}" stroke="#bbbbbb" stroke-width="0.2px" />\n`;
-        placementElements += `  <rect x="${labelX - boxWidth / 2}" y="${labelY - boxHeight / 2}" width="${boxWidth}" height="${boxHeight}" fill="#ff0000" opacity="0.8" />\n`;
+          const boxWidth = Math.max(1.5, (maxX - minX) * 0.2);
+          const boxHeight = Math.max(1.5, (maxY - minY) * 0.2);
 
-        finalCompositeLayers += `  <g>\n`;
-        finalCompositeLayers += `    <path d="${smoothedPathData}" fill="${fillHex}" opacity="0.6" />\n`;
-        finalCompositeLayers += `    <path d="${smoothedPathData}" />\n`;
-        finalCompositeLayers += `    <text x="${labelX.toFixed(1)}" y="${labelY.toFixed(1)}">${targetCluster + 1}</text>\n`;
-        finalCompositeLayers += `  </g>\n`;
+          placementElements += `  <path d="${smoothedPathData}" stroke="#bbbbbb" stroke-width="0.2px" />\n`;
+          placementElements += `  <rect x="${labelX - boxWidth / 2}" y="${labelY - boxHeight / 2}" width="${boxWidth}" height="${boxHeight}" fill="#ff0000" opacity="0.8" />\n`;
 
-        for (const idx of componentIndices) currentFacetGrid[idx] = 0;
+          finalCompositeLayers += `  <g>\n`;
+          finalCompositeLayers += `    <path d="${smoothedPathData}" fill="${fillHex}" fill-rule="evenodd" opacity="0.6" />\n`;
+          finalCompositeLayers += `    <path d="${smoothedPathData}" />\n`;
+          finalCompositeLayers += `    <text x="${labelX.toFixed(1)}" y="${labelY.toFixed(1)}">${targetCluster + 1}</text>\n`;
+          finalCompositeLayers += `  </g>\n`;
+        }
+
+        for (const idx of componentIndices) {
+          currentFacetGrid[idx] = 0;
+        }
       }
     }
 
@@ -201,102 +209,198 @@ export class PaintEngineService {
   }
 
   // =========================================================================
-  // TOPOLOGY EXTRACTION & WAVELET SMOOTHING LOGIC
+  // BORDER TRACING LOGIC
   // =========================================================================
 
-  /**
-   * Walks integer edges of a facet boundary, breaks paths at multi-facet junction nodes,
-   * applies point averaging to smooth intermediate vertices, and emits fluid composite SVG curves.
-   */
-  private extractAndSmoothFacetBoundary(
+  private traceContourPath(
     indices: number[],
-    facetGrid: Uint8Array,
+    facetMembership: Uint8Array,
     width: number,
     height: number,
   ): string {
-    // 1. Gather all unique spatial outer edge midpoints bounding the component
-    const rawBorderPoints: Point[] = [];
+    let pathString = '';
     const isMember = (nx: number, ny: number) =>
-      nx >= 0 && nx < width && ny >= 0 && ny < height && facetGrid[ny * width + nx] === 1;
+      nx >= 0 && nx < width && ny >= 0 && ny < height && facetMembership[ny * width + nx] === 1;
 
     for (const idx of indices) {
       const x = idx % width;
       const y = Math.floor(idx / width);
-      if (!isMember(x, y - 1)) rawBorderPoints.push({ x: x + 0.5, y: y });
-      if (!isMember(x + 1, y)) rawBorderPoints.push({ x: x + 1, y: y + 0.5 });
-      if (!isMember(x, y + 1)) rawBorderPoints.push({ x: x + 0.5, y: y + 1 });
-      if (!isMember(x - 1, y)) rawBorderPoints.push({ x: x, y: y + 0.5 });
+
+      if (!isMember(x, y - 1) && y > 0) pathString += `M ${x} ${y} L ${x + 1} ${y} `;
+      if (!isMember(x + 1, y) && x < width - 1)
+        pathString += `M ${x + 1} ${y} L ${x + 1} ${y + 1} `;
+      if (!isMember(x, y + 1) && y < height - 1)
+        pathString += `M ${x + 1} ${y + 1} L ${x} ${y + 1} `;
+      if (!isMember(x - 1, y) && x > 0) pathString += `M ${x} ${y + 1} L ${x} ${y} `;
     }
-
-    if (rawBorderPoints.length <= 4) {
-      // Extremely simple shapes fall back cleanly to standard drawing loops
-      return this.pointsToPathString(rawBorderPoints);
-    }
-
-    // 2. Order raw edge points into a continuous geometric loop via nearest-neighbor tracing
-    const orderedLoop: Point[] = [];
-    const pts = [...rawBorderPoints];
-    let current = pts.shift()!;
-    orderedLoop.push(current);
-
-    while (pts.length > 0) {
-      let minDist = Infinity;
-      let bestIdx = 0;
-      for (let i = 0; i < pts.length; i++) {
-        const d = Math.hypot(current.x - pts[i].x, current.y - pts[i].y);
-        if (d < minDist) {
-          minDist = d;
-          bestIdx = i;
-        }
-      }
-      // If gaps open up, break early to prevent erratic line crossings across detached sub-shapes
-      if (minDist > 1.5) break;
-      current = pts.splice(bestIdx, 1)[0];
-      orderedLoop.push(current);
-    }
-
-    // 3. Apply Multi-Pass Path Smoothing (Iterative Haar Wavelet Reduction)
-    // Anchors start/end states while iteratively averaging internal points to smooth pixel staircases
-    let smoothedLoop = [...orderedLoop];
-    const smoothingIterations = 3;
-
-    for (let iter = 0; iter < smoothingIterations; iter++) {
-      const nextLoop: Point[] = [];
-      const len = smoothedLoop.length;
-
-      for (let i = 0; i < len; i++) {
-        const prev = smoothedLoop[(i - 1 + len) % len];
-        const curr = smoothedLoop[i];
-        const next = smoothedLoop[(i + 1) % len];
-
-        // Detect structural corner thresholds to protect distinct master geometry points
-        const isCorner = curr.x % 1 === 0 && curr.y % 1 === 0;
-
-        if (isCorner) {
-          nextLoop.push(curr); // Anchor junction vertex securely
-        } else {
-          // Average control point coordinates with local adjacent path vectors
-          nextLoop.push({
-            x: (prev.x + curr.x * 2 + next.x) / 4,
-            y: (prev.y + curr.y * 2 + next.y) / 4,
-          });
-        }
-      }
-      smoothedLoop = nextLoop;
-    }
-
-    return this.pointsToPathString(smoothedLoop);
+    return pathString.trim();
   }
 
-  private pointsToPathString(points: Point[]): string {
-    if (points.length === 0) return '';
+  // =========================================================================
+  // CRITICAL FIX: TRUE PLANAR SEGMENTATION & WAVELET SMOOTHING
+  // =========================================================================
+
+  /**
+   * Evaluates vertex paths globally. Identifies true multi-color junction points where
+   * multiple cluster IDs intersect, and averages internal segment nodes cleanly to achieve
+   * fluid vector smoothing while preserving shared border geometry perfectly.
+   */
+  private extractAndSmoothFacetBoundary(
+    indices: number[],
+    facetGrid: Uint8Array,
+    globalLabels: Int32Array,
+    width: number,
+    height: number,
+  ): string {
+    interface Segment {
+      x1: number;
+      y1: number;
+      x2: number;
+      y2: number;
+    }
+    const segments: Segment[] = [];
+    const isMember = (nx: number, ny: number) =>
+      nx >= 0 && nx < width && ny >= 0 && ny < height && facetGrid[ny * width + nx] === 1;
+
+    // Extract outer unit perimeter segments excluding layout borders
+    for (const idx of indices) {
+      const x = idx % width;
+      const y = Math.floor(idx / width);
+      if (!isMember(x, y - 1) && y > 0) segments.push({ x1: x, y1: y, x2: x + 1, y2: y });
+      if (!isMember(x + 1, y) && x < width - 1)
+        segments.push({ x1: x + 1, y1: y, x2: x + 1, y2: y + 1 });
+      if (!isMember(x, y + 1) && y < height - 1)
+        segments.push({ x1: x + 1, y1: y + 1, x2: x, y2: y + 1 });
+      if (!isMember(x - 1, y) && x > 0) segments.push({ x1: x, y1: y + 1, x2: x, y2: y });
+    }
+
+    if (segments.length === 0) return '';
+
+    // Chain contiguous unit vectors endpoint-to-endpoint into maximal raw path loops
+    const chains: Point[][] = [];
+    const used = new Uint8Array(segments.length);
+
+    for (let i = 0; i < segments.length; i++) {
+      if (used[i]) continue;
+      used[i] = 1;
+      const currentChain: Point[] = [
+        { x: segments[i].x1, y: segments[i].y1 },
+        { x: segments[i].x2, y: segments[i].y2 },
+      ];
+
+      let extended = true;
+      while (extended) {
+        extended = false;
+        const firstPt = currentChain[0];
+        const lastPt = currentChain[currentChain.length - 1];
+
+        for (let j = 0; j < segments.length; j++) {
+          if (used[j]) continue;
+          if (segments[j].x1 === lastPt.x && segments[j].y1 === lastPt.y) {
+            currentChain.push({ x: segments[j].x2, y: segments[j].y2 });
+            used[j] = 1;
+            extended = true;
+            break;
+          } else if (segments[j].x2 === lastPt.x && segments[j].y2 === lastPt.y) {
+            currentChain.push({ x: segments[j].x1, y: segments[j].y1 });
+            used[j] = 1;
+            extended = true;
+            break;
+          } else if (segments[j].x2 === firstPt.x && segments[j].y2 === firstPt.y) {
+            currentChain.unshift({ x: segments[j].x1, y: segments[j].y1 });
+            used[j] = 1;
+            extended = true;
+            break;
+          } else if (segments[j].x1 === firstPt.x && segments[j].y1 === firstPt.y) {
+            currentChain.unshift({ x: segments[j].x2, y: segments[j].y2 });
+            used[j] = 1;
+            extended = true;
+            break;
+          }
+        }
+      }
+      if (currentChain.length > 2) chains.push(currentChain);
+    }
+
+    // Helper: Evaluates true multi-facet connectivity around a target integer grid vertex
+    const isTrueJunction = (pt: Point): boolean => {
+      // Points sitting on the layout perimeter are automatically treated as terminal anchors
+      if (pt.x <= 0 || pt.x >= width || pt.y <= 0 || pt.y >= height) return true;
+
+      // Gather unique color IDs from the 4 specific pixel quadrants sharing this corner vertex
+      const uniqueColors = new Set<number>();
+      const quadrants = [
+        { cx: pt.x - 1, cy: pt.y - 1 },
+        { cx: pt.x, cy: pt.y - 1 },
+        { cx: pt.x - 1, cy: pt.y },
+        { cx: pt.x, cy: pt.y },
+      ];
+
+      for (const q of quadrants) {
+        if (q.cx >= 0 && q.cx < width && q.cy >= 0 && q.cy < height) {
+          uniqueColors.add(globalLabels[q.cy * width + q.cx]);
+        }
+      }
+      // A vertex is a true junction if three or more distinct visual color zones meet at this coordinate
+      return uniqueColors.size >= 3;
+    };
+
+    let masterPathString = '';
+
+    // Apply Multi-Pass Wavelet Averaging strictly protecting isolated multi-color junction nodes
+    for (const chain of chains) {
+      const isClosed =
+        chain[0].x === chain[chain.length - 1].x && chain[0].y === chain[chain.length - 1].y;
+      let smoothedChain = [...chain];
+      const smoothingIterations = 3;
+
+      for (let iter = 0; iter < smoothingIterations; iter++) {
+        const nextChain: Point[] = [];
+        const len = smoothedChain.length;
+
+        for (let i = 0; i < len; i++) {
+          // Terminal endpoints of open paths remain locked securely
+          if (!isClosed && (i === 0 || i === len - 1)) {
+            nextChain.push(smoothedChain[i]);
+            continue;
+          }
+
+          const prev = smoothedChain[(i - 1 + len) % len];
+          const curr = smoothedChain[i];
+          const next = smoothedChain[(i + 1) % len];
+
+          // CRITICAL FIX: Only freeze nodes that act as true multi-color planar interfaces
+          if (isTrueJunction(curr)) {
+            nextChain.push(curr);
+          } else {
+            // Apply Haar Wavelet localized point-averaging to soften pixel staircase segments
+            nextChain.push({
+              x: (prev.x + curr.x * 2 + next.x) / 4,
+              y: (prev.y + curr.y * 2 + next.y) / 4,
+            });
+          }
+        }
+        smoothedChain = nextChain;
+      }
+      masterPathString += this.pointsToPathString(smoothedChain, isClosed) + ' ';
+    }
+
+    return masterPathString.trim();
+  }
+
+  private pointsToPathString(points: Point[], isClosed: boolean): string {
+    if (points.length < 2) return '';
     let s = `M ${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)} `;
-    for (let i = 1; i < points.length; i++)
+    for (let i = 1; i < points.length; i++) {
       s += `L ${points[i].x.toFixed(2)} ${points[i].y.toFixed(2)} `;
-    return s + 'Z';
+    }
+    return isClosed ? s + 'Z' : s;
   }
 
-  // Standard serialization tracing helper functions
+  // =========================================================================
+  // CORE MORPHOLOGY & CLUSTERING LOGIC
+  // =========================================================================
+
   private reduceFacets(labels: Int32Array, width: number, height: number, minArea: number): void {
     const totalPixels = width * height;
     const visited = new Uint8Array(totalPixels);
@@ -398,26 +502,6 @@ export class PaintEngineService {
       if (!moved) break;
     }
     return centroids;
-  }
-
-  private traceContourPath(
-    indices: number[],
-    facetMembership: Uint8Array,
-    width: number,
-    height: number,
-  ): string {
-    let pathString = '';
-    for (const idx of indices) {
-      const x = idx % width;
-      const y = Math.floor(idx / width);
-      const isMember = (nx: number, ny: number) =>
-        nx >= 0 && nx < width && ny >= 0 && ny < height && facetMembership[ny * width + nx] === 1;
-      if (!isMember(x, y - 1)) pathString += `M ${x} ${y} L ${x + 1} ${y} `;
-      if (!isMember(x + 1, y)) pathString += `M ${x + 1} ${y} L ${x + 1} ${y + 1} `;
-      if (!isMember(x, y + 1)) pathString += `M ${x + 1} ${y + 1} L ${x} ${y + 1} `;
-      if (!isMember(x - 1, y)) pathString += `M ${x} ${y + 1} L ${x} ${y} `;
-    }
-    return pathString.trim();
   }
 
   private rgbToLab(color: RGB): LAB {

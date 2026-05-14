@@ -171,6 +171,8 @@
 }
 
 /* CRITICAL SCALING RULE: Ensure raster images and vector blocks scale to available container space */
+/* Replace the corresponding selector block inside src/app/features/generator/generator.component.scss */
+
 .svg-container {
   width: 100%;
   height: 100%;
@@ -179,29 +181,34 @@
   justify-content: center;
   padding: 12px;
   box-sizing: border-box;
+  overflow: hidden;
 
-  /* Targets the raw raster DataURLs (Quantized & Reduction stages) */
+  /* Target dynamic raster buffers (Quantized & Reduction tabs) */
+  /* Force image buffers to scale up fluidly to fill container bounds */
   img {
     width: 100%;
     height: 100%;
-    object-fit: contain; /* Scales content up/down while strictly preserving aspect ratio */
-    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain; /* Scales data up/down while strictly preserving native aspect ratios */
+
     display: block;
-    image-rendering: pixelated;
+    image-rendering: pixelated; /* Ensures clean scaling without blurry interpolation */
   }
 
-  /* Targets the inner dynamically injected scalable vector strings */
+  /* Target internal dynamically injected SVG layers (Tracing, Segments, Placement, Output tabs) */
+  /* Allow vector viewbox layouts to scale natively to the center of the flex wrapper */
   ::ng-deep svg {
-    width: 100%;
-    height: 100%;
+    max-width: 100%;
     max-height: 100%;
+    width: auto;
+    height: auto;
     object-fit: contain;
     box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
     background: #ffffff;
     display: block;
   }
 }
-
 /* Standard UI elements */
 .card {
   background: #ffffff;
