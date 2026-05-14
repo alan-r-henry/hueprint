@@ -1,15 +1,17 @@
+// src/app/features/generator/generator.component.ts
+
 import { Component, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { GenerationResult, GeneratorConfig } from '../../core/models/types';
-import { PaintEngineService } from '../../core/services/paintengine.service';
+import { PaintEngineService } from '../../core/services/paint-engine.service';
 
 @Component({
   selector: 'app-generator',
   standalone: true,
   imports: [CommonModule],
   templateUrl: './generator.html',
-  styleUrls: ['./generator.scss']
+  styleUrls: ['./generator.scss'],
 })
 export class GeneratorComponent {
   private paintEngine = inject(PaintEngineService);
@@ -19,12 +21,19 @@ export class GeneratorComponent {
   previewUrl = signal<string | null>(null);
   isProcessing = signal<boolean>(false);
   resultData = signal<GenerationResult | null>(null);
-  safeSvgContent = signal<SafeHtml | null>(null);
+
+  // Active Stage Navigation Pointers
+  activeTab = signal<'quantized' | 'reduction' | 'tracing' | 'placement' | 'final'>('final');
+
+  // Sanitized string wrappers
+  safeTracingSvg = signal<SafeHtml | null>(null);
+  safePlacementSvg = signal<SafeHtml | null>(null);
+  safeFinalSvg = signal<SafeHtml | null>(null);
 
   config = signal<GeneratorConfig>({
     clusterCount: 8,
     minFacetArea: 10,
-    maxImageDimension: 600
+    maxImageDimension: 600,
   });
 
   onFileSelected(event: Event): void {
@@ -33,8 +42,6 @@ export class GeneratorComponent {
       const file = input.files[0];
       this.selectedFile.set(file);
       this.resultData.set(null);
-      this.safeSvgContent.set(null);
-
       const reader = new FileReader();
       reader.onload = (e) => this.previewUrl.set(e.target?.result as string);
       reader.readAsDataURL(file);
@@ -43,7 +50,11 @@ export class GeneratorComponent {
 
   updateConfig(key: keyof GeneratorConfig, event: Event): void {
     const value = Number((event.target as HTMLInputElement).value);
-    this.config.update(curr => ({ ...curr, [key]: value }));
+    this.config.update((curr) => ({ ...curr, [key]: value }));
+  }
+
+  setActiveTab(tab: 'quantized' | 'reduction' | 'tracing' | 'placement' | 'final'): void {
+    this.activeTab.set(tab);
   }
 
   async generateCanvas(): Promise<void> {
@@ -54,10 +65,13 @@ export class GeneratorComponent {
     try {
       const res = await this.paintEngine.processImage(file, this.config());
       this.resultData.set(res);
-      this.safeSvgContent.set(this.sanitizer.bypassSecurityTrustHtml(res.svgContent));
+      this.safeTracingSvg.set(this.sanitizer.bypassSecurityTrustHtml(res.tracingSvg));
+      this.safePlacementSvg.set(this.sanitizer.bypassSecurityTrustHtml(res.placementSvg));
+      this.safeFinalSvg.set(this.sanitizer.bypassSecurityTrustHtml(res.finalSvg));
+      this.activeTab.set('final'); // Open master preview by default
     } catch (error) {
       console.error('Generation Error:', error);
-      alert('Failed to process image matrix. Try an image with a smaller footprint.');
+      alert('Processing thread overload. Downsample constraints activated.');
     } finally {
       this.isProcessing.set(false);
     }
@@ -66,12 +80,11 @@ export class GeneratorComponent {
   downloadSVG(): void {
     const data = this.resultData();
     if (!data) return;
-
-    const blob = new Blob([data.svgContent], { type: 'image/svg+xml' });
+    const blob = new Blob([data.finalSvg], { type: 'image/svg+xml' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'paint-by-numbers-canvas.svg';
+    a.download = 'paint-by-numbers-master.svg';
     a.click();
     window.URL.revokeObjectURL(url);
   }
