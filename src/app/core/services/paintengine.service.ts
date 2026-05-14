@@ -2,16 +2,16 @@ import { Injectable } from '@angular/core';
 import { GeneratorConfig, GenerationResult, RGB } from '../models/types';
 
 @Injectable({
-  providedIn: 'root'
+  providedIn: 'root',
 })
 export class PaintEngineService {
-
   public async processImage(file: File, config: GeneratorConfig): Promise<GenerationResult> {
     const img = await this.loadImage(file);
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) throw new Error('Failed to get 2D context');
 
+    // 1. Maintain aspect ratio while strictly enforcing maximum dimension constraints
     let width = img.width;
     let height = img.height;
     if (width > config.maxImageDimension || height > config.maxImageDimension) {
@@ -32,11 +32,13 @@ export class PaintEngineService {
     const data = imageData.data;
     const totalPixels = width * height;
 
+    // 2. Extract pixel RGB array
     const pixels: RGB[] = [];
     for (let i = 0; i < data.length; i += 4) {
       pixels.push({ r: data[i], g: data[i + 1], b: data[i + 2] });
     }
 
+    // 3. Execute K-Means Color Clustering
     const palette = this.runKMeans(pixels, config.clusterCount);
     const labels = new Int32Array(totalPixels);
     const frequencyMap = new Map<number, number>();
@@ -58,22 +60,29 @@ export class PaintEngineService {
       frequencyMap.set(bestCluster, (frequencyMap.get(bestCluster) || 0) + 1);
     }
 
+    // 4. Trace Exact Geometry Borders
     let svgString = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="100%" height="100%">\n`;
-    svgString += `<style>path { stroke: #b0b0b0; stroke-width: 0.5px; fill: none; } text { font-family: sans-serif; font-size: 3px; fill: #444; text-anchor: middle; dominant-baseline: middle; }</style>\n`;
+    svgString += `<style>path { stroke: #888888; stroke-width: 0.4px; stroke-linejoin: round; stroke-linecap: round; fill: none; } text { font-family: system-ui, sans-serif; font-size: 2.5px; font-weight: 600; fill: #222; text-anchor: middle; dominant-baseline: central; }</style>\n`;
 
     const visited = new Uint8Array(totalPixels);
+    // Temporary lookup grid used to quickly map active facet membership during edge analysis
+    const currentFacetGrid = new Uint8Array(totalPixels);
+
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
-        const idx = y * width + x;
-        if (visited[idx]) continue;
+        const startIdx = y * width + x;
+        if (visited[startIdx]) continue;
 
-        const targetCluster = labels[idx];
+        const targetCluster = labels[startIdx];
         const componentIndices: number[] = [];
-        const queue: number[] = [idx];
-        visited[idx] = 1;
+        const queue: number[] = [startIdx];
+        visited[startIdx] = 1;
+        currentFacetGrid[startIdx] = 1;
 
-        let minX = x, maxX = x, minY = y, maxY = y;
+        let sumX = 0;
+        let sumY = 0;
 
+        // Extract connected component via flood-fill
         while (queue.length > 0) {
           const curr = queue.pop()!;
           componentIndices.push(curr);
@@ -81,16 +90,14 @@ export class PaintEngineService {
           const cx = curr % width;
           const cy = Math.floor(curr / width);
 
-          if (cx < minX) minX = cx;
-          if (cx > maxX) maxX = cx;
-          if (cy < minY) minY = cy;
-          if (cy > maxY) maxY = cy;
+          sumX += cx;
+          sumY += cy;
 
           const neighbors = [
             { nx: cx + 1, ny: cy },
             { nx: cx - 1, ny: cy },
             { nx: cx, ny: cy + 1 },
-            { nx: cx, ny: cy - 1 }
+            { nx: cx, ny: cy - 1 },
           ];
 
           for (const n of neighbors) {
@@ -98,36 +105,90 @@ export class PaintEngineService {
               const nIdx = n.ny * width + n.nx;
               if (!visited[nIdx] && labels[nIdx] === targetCluster) {
                 visited[nIdx] = 1;
+                currentFacetGrid[nIdx] = 1;
                 queue.push(nIdx);
               }
             }
           }
         }
 
+        // Apply topological filtering (Pruning small noise areas)
         if (componentIndices.length >= config.minFacetArea) {
-          const pathData = `M ${minX} ${minY} L ${maxX} ${minY} L ${maxX} ${maxY} L ${minX} ${maxY} Z`;
-          const centerX = (minX + maxX) / 2;
-          const centerY = (minY + maxY) / 2;
+          // Generate precise vector contour path string for the facet
+          const pathData = this.traceContourPath(componentIndices, currentFacetGrid, width, height);
+
+          // Place label near the visual centroid mass of the extracted component
+          const labelX = sumX / componentIndices.length + 0.5;
+          const labelY = sumY / componentIndices.length + 0.5;
 
           svgString += `  <g>\n`;
           svgString += `    <path d="${pathData}" />\n`;
-          svgString += `    <text x="${centerX}" y="${centerY}">${targetCluster + 1}</text>\n`;
+          svgString += `    <text x="${labelX.toFixed(1)}" y="${labelY.toFixed(1)}">${targetCluster + 1}</text>\n`;
           svgString += `  </g>\n`;
+        }
+
+        // Reset the lookup grid cleanly for the next shape extraction
+        for (const idx of componentIndices) {
+          currentFacetGrid[idx] = 0;
         }
       }
     }
     svgString += `</svg>`;
 
-    const finalPalette = palette.map((rgb, index) => {
-      const count = frequencyMap.get(index) || 0;
-      return {
-        id: index + 1,
-        hex: this.rgbToHex(rgb),
-        percentage: Number(((count / totalPixels) * 100).toFixed(1))
-      };
-    }).sort((a, b) => b.percentage - a.percentage);
+    const finalPalette = palette
+      .map((rgb, index) => {
+        const count = frequencyMap.get(index) || 0;
+        return {
+          id: index + 1,
+          hex: this.rgbToHex(rgb),
+          percentage: Number(((count / totalPixels) * 100).toFixed(1)),
+        };
+      })
+      .sort((a, b) => b.percentage - a.percentage);
 
     return { svgContent: svgString, palette: finalPalette };
+  }
+
+  /**
+   * Scans pixel boundaries of a component to extract clean SVG contour paths.
+   */
+  private traceContourPath(
+    indices: number[],
+    facetMembership: Uint8Array,
+    width: number,
+    height: number,
+  ): string {
+    let pathString = '';
+
+    // Map boundary segments to avoid drawing internal solid blocks
+    for (const idx of indices) {
+      const x = idx % width;
+      const y = Math.floor(idx / width);
+
+      const isMember = (nx: number, ny: number) => {
+        if (nx < 0 || nx >= width || ny < 0 || ny >= height) return false;
+        return facetMembership[ny * width + nx] === 1;
+      };
+
+      // Top edge
+      if (!isMember(x, y - 1)) {
+        pathString += `M ${x} ${y} L ${x + 1} ${y} `;
+      }
+      // Right edge
+      if (!isMember(x + 1, y)) {
+        pathString += `M ${x + 1} ${y} L ${x + 1} ${y + 1} `;
+      }
+      // Bottom edge
+      if (!isMember(x, y + 1)) {
+        pathString += `M ${x + 1} ${y + 1} L ${x} ${y + 1} `;
+      }
+      // Left edge
+      if (!isMember(x - 1, y)) {
+        pathString += `M ${x} ${y + 1} L ${x} ${y} `;
+      }
+    }
+
+    return pathString.trim();
   }
 
   private runKMeans(pixels: RGB[], k: number): RGB[] {
@@ -137,7 +198,7 @@ export class PaintEngineService {
       centroids.push({ ...randPixel });
     }
 
-    const maxIterations = 10;
+    const maxIterations = 12;
     for (let iter = 0; iter < maxIterations; iter++) {
       const sums = Array.from({ length: k }, () => ({ r: 0, g: 0, b: 0, count: 0 }));
 
