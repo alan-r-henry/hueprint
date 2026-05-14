@@ -1,6 +1,6 @@
-/* src/app/features/generator/generator.scss */
+/* src/app/features/generator/generator.component.scss */
 
-/* Lock the entire application wrapper to the exact window viewport height */
+/* Lock application wrapper to the viewport window bounds */
 .dashboard-wrapper {
   padding: 16px 24px;
   box-sizing: border-box;
@@ -20,7 +20,6 @@
   background-color: #f9fafb;
 }
 
-/* Header stays fixed at the top */
 .app-header {
   flex-shrink: 0;
   margin-bottom: 16px;
@@ -33,7 +32,6 @@
     font-weight: 700;
     color: #111827;
   }
-
   p {
     margin: 4px 0 0 0;
     color: #6b7280;
@@ -41,24 +39,22 @@
   }
 }
 
-/* Main container takes up all remaining vertical space */
 .grid-container {
   flex-grow: 1;
   display: grid;
   grid-template-columns: 400px 1fr;
   gap: 24px;
-  overflow: hidden; /* Prevent page-level scrollbars */
+  overflow: hidden;
   height: 100%;
 }
 
-/* Left Panel: Independently scrollable */
+/* Left panel scrolls natively inside its boundary */
 .control-panel {
   height: 100%;
-  overflow-y: auto; /* Enable inner vertical scrolling */
-  padding-right: 8px; /* Breathing room for the custom scrollbar */
+  overflow-y: auto;
+  padding-right: 8px;
   box-sizing: border-box;
 
-  /* Custom subtle scrollbar styling */
   &::-webkit-scrollbar {
     width: 6px;
   }
@@ -75,7 +71,7 @@
   }
 }
 
-/* Right Panel: Fills the remaining layout width entirely */
+/* Right panel layout stretches dynamically */
 .output-panel {
   height: 100%;
   overflow: hidden;
@@ -83,7 +79,6 @@
   flex-direction: column;
 }
 
-/* Card inside right panel stretches to maximum bounds */
 .canvas-display-card {
   flex-grow: 1;
   background: #ffffff;
@@ -96,25 +91,54 @@
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+}
 
-  .output-header {
-    flex-shrink: 0;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 16px;
-    border-bottom: 2px solid #f3f4f6;
-    padding-bottom: 12px;
+/* Header layout container styles */
+.output-header {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  border-bottom: 2px solid #f3f4f6;
+  padding-bottom: 12px;
+  gap: 16px;
+}
 
-    h2 {
-      margin: 0;
-      font-size: 18px;
-      color: #111827;
+.stage-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+
+  .tab-btn {
+    padding: 8px 14px;
+    border: none;
+    background: #f3f4f6;
+    color: #6b7280;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+
+    &:hover:not(:disabled) {
+      background: #e5e7eb;
+      color: #1f2937;
+    }
+    &.active {
+      background: #eff6ff;
+      color: #1d4ed8;
+      box-shadow: inset 0 0 0 1px #bfdbfe;
+    }
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
     }
   }
 }
 
-/* Dynamic SVG rendering viewport fills card contents */
+/* Main execution preview container */
 .render-viewport {
   flex-grow: 1;
   background: #f3f4f6;
@@ -123,7 +147,7 @@
   align-items: center;
   justify-content: center;
   position: relative;
-  overflow: hidden; /* Keeps SVG bounded cleanly inside */
+  overflow: hidden;
   height: 100%;
   width: 100%;
 
@@ -144,28 +168,41 @@
     animation: spin 1s linear infinite;
     margin: 0 auto 16px auto;
   }
+}
 
-  .svg-container {
+/* CRITICAL SCALING RULE: Ensure raster images and vector blocks scale to available container space */
+.svg-container {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  box-sizing: border-box;
+
+  /* Targets the raw raster DataURLs (Quantized & Reduction stages) */
+  img {
     width: 100%;
     height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 12px;
-    box-sizing: border-box;
+    object-fit: contain; /* Scales content up/down while strictly preserving aspect ratio */
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    display: block;
+    image-rendering: pixelated;
+  }
 
-    ::ng-deep svg {
-      max-width: 100%;
-      max-height: 100%; /* Scales dynamically to available height */
-      object-fit: contain;
-      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-      background: #ffffff;
-      display: block;
-    }
+  /* Targets the inner dynamically injected scalable vector strings */
+  ::ng-deep svg {
+    width: 100%;
+    height: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+    background: #ffffff;
+    display: block;
   }
 }
 
-/* Standard shared styles */
+/* Standard UI elements */
 .card {
   background: #ffffff;
   border-radius: 8px;
@@ -173,7 +210,6 @@
   padding: 20px;
   margin-bottom: 20px;
   box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05);
-
   h2 {
     margin: 0 0 16px 0;
     font-size: 16px;
