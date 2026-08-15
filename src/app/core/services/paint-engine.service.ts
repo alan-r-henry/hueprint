@@ -35,8 +35,15 @@ export class PaintEngineService {
    */
   public static readonly PAUSED_CLASS = 'pbn-paused';
 
-  /** Resting opacity of a colour wash once it has been painted in. */
-  private static readonly FILL_OPACITY = 0.6;
+  /**
+   * Resting opacity of a colour wash once it has been painted in.
+   *
+   * Full opacity, so a painted facet matches its palette swatch exactly. Anything less blends the
+   * colour with the white page behind it and the artwork reads as a washed-out version of the
+   * palette. Nothing needs to show through: a facet's outline and number are removed at the moment
+   * its colour lands.
+   */
+  private static readonly FILL_OPACITY = 1;
 
   /** Seconds the animation rests while empty and again once fully painted. */
   private static readonly HOLD_SECONDS = 5;
