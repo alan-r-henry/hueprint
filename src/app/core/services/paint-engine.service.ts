@@ -23,6 +23,12 @@ export class PaintEngineService {
   /** Applied to each colour wash path in the final composite, alongside `pbn-fill-{colourId}`. */
   public static readonly FILL_CLASS = 'pbn-fill';
 
+  /** Applied to each facet outline, alongside `pbn-outline-{colourId}`. */
+  public static readonly OUTLINE_CLASS = 'pbn-outline';
+
+  /** Applied to each facet number, alongside `pbn-label-{colourId}`. */
+  public static readonly LABEL_CLASS = 'pbn-label';
+
   /**
    * Set on an ancestor of the SVG to freeze the painting animation in place.
    * The view toggles this while the download control is hovered or focused.
@@ -32,11 +38,11 @@ export class PaintEngineService {
   /** Resting opacity of a colour wash once it has been painted in. */
   private static readonly FILL_OPACITY = 0.6;
 
-  /** Seconds the animation rests at the start, when fully painted, and when fully cleared. */
+  /** Seconds the animation rests while empty and again once fully painted. */
   private static readonly HOLD_SECONDS = 5;
 
-  /** Seconds between one colour being added or removed and the next. */
-  private static readonly STEP_SECONDS = 1;
+  /** Seconds between one colour being painted in and the next. */
+  private static readonly STEP_SECONDS = 0.5;
 
   /** Maximum k-means refinement passes before the current centroids are accepted. */
   private static readonly KMEANS_MAX_ITERATIONS = 15;
@@ -235,13 +241,21 @@ export class PaintEngineService {
           // in styleBase above would override a `fill="..."` attribute and the wash would never
           // render. An inline style declaration outranks that rule.
           //
-          // Each wash also carries a per-colour class so the view layer can drive the painting
-          // animation without re-parsing path data. See buildPaintAnimationCss().
+          // The wash is also stroked in its own colour, at the same width as the outline it sits
+          // under. Once a facet is painted its outline is hidden, and without this the hairline the
+          // outline used to occupy would show through as an unpainted seam between neighbours.
+          //
+          // Every layer carries a per-colour class so the view can drive the painting animation
+          // without re-parsing path data. See buildPaintAnimationCss().
           const colourId = targetCluster + 1;
+          const fillClasses = `${PaintEngineService.FILL_CLASS} ${PaintEngineService.FILL_CLASS}-${colourId}`;
+          const outlineClasses = `${PaintEngineService.OUTLINE_CLASS} ${PaintEngineService.OUTLINE_CLASS}-${colourId}`;
+          const labelClasses = `${PaintEngineService.LABEL_CLASS} ${PaintEngineService.LABEL_CLASS}-${colourId}`;
+
           finalCompositeLayers += `  <g>\n`;
-          finalCompositeLayers += `    <path class="${PaintEngineService.FILL_CLASS} ${PaintEngineService.FILL_CLASS}-${colourId}" d="${smoothedPathData}" style="fill: ${fillHex}" fill-rule="evenodd" opacity="${PaintEngineService.FILL_OPACITY}" />\n`;
-          finalCompositeLayers += `    <path d="${smoothedPathData}" />\n`;
-          finalCompositeLayers += `    <text x="${labelX.toFixed(2)}" y="${labelY.toFixed(2)}" font-size="${calculatedFontSize}px">${colourId}</text>\n`;
+          finalCompositeLayers += `    <path class="${fillClasses}" d="${smoothedPathData}" style="fill: ${fillHex}; stroke: ${fillHex}" fill-rule="evenodd" opacity="${PaintEngineService.FILL_OPACITY}" />\n`;
+          finalCompositeLayers += `    <path class="${outlineClasses}" d="${smoothedPathData}" />\n`;
+          finalCompositeLayers += `    <text class="${labelClasses}" x="${labelX.toFixed(2)}" y="${labelY.toFixed(2)}" font-size="${calculatedFontSize}px">${colourId}</text>\n`;
           finalCompositeLayers += `  </g>\n`;
         }
 
@@ -288,17 +302,21 @@ export class PaintEngineService {
    * For K colours ordered from the largest share of the image to the smallest, one cycle runs:
    *
    *   hold empty (5s)
-   *     -> add one colour per second, largest area first        (K seconds)
+   *     -> paint one colour every 0.5s, largest area first    ((K-1) * 0.5 seconds)
    *   hold fully painted (5s)
-   *     -> remove one colour per second, smallest area first    (K seconds)
-   *   hold empty (5s), then repeat forever
+   *     -> snap back to empty and repeat forever
    *
-   * Each wash is driven by its own keyframes rather than a JavaScript timer. The browser owns the
-   * timing, nothing has to be torn down when the component is destroyed, and the whole sequence
-   * can be frozen by toggling a single class on any ancestor.
+   * As each colour is painted, the outlines and numbers belonging to it are hidden in the same
+   * step, so a finished region reads as solid paint rather than a filled-in template. The wash is
+   * stroked in its own colour (see processImage) so the vanished outline leaves no seam.
+   *
+   * Every layer is driven by its own keyframes rather than a JavaScript timer. The browser owns
+   * the timing, nothing has to be torn down when the component is destroyed, and the whole
+   * sequence can be frozen by toggling a single class on any ancestor.
    *
    * This is deliberately NOT baked into GenerationResult.finalSvg. That string is what the user
-   * downloads, and a template meant for printing must be static and fully coloured.
+   * downloads, and a template meant for printing must be static, fully coloured, and still carry
+   * its outlines and numbers.
    *
    * @param palette Palette from a GenerationResult, ordered by descending percentage.
    * @returns An SVG `<style>` element, or an empty string when there is nothing to animate.
@@ -310,44 +328,60 @@ export class PaintEngineService {
     const hold = PaintEngineService.HOLD_SECONDS;
     const step = PaintEngineService.STEP_SECONDS;
     const fill = PaintEngineService.FILL_CLASS;
+    const outline = PaintEngineService.OUTLINE_CLASS;
+    const label = PaintEngineService.LABEL_CLASS;
 
-    // K colours applied one per second span K-1 intervals, not K: the first lands the instant the
+    // K colours applied one per step span K-1 intervals, not K: the first lands the instant the
     // opening rest ends and the last lands when the pass is complete. Counting K here would add a
-    // spurious extra second to every rest period.
+    // spurious extra step to the rest periods.
     const passSeconds = (colourCount - 1) * step;
 
-    // Three rest periods (start, fully painted, fully cleared) plus a paint-in and a paint-out pass.
-    const totalSeconds = hold * 3 + passSeconds * 2;
+    // Rest empty, paint in, rest painted. The wrap back to 0% is the jump straight to empty.
+    const totalSeconds = hold * 2 + passSeconds;
     const asPercent = (seconds: number) => Number(((seconds / totalSeconds) * 100).toFixed(4));
 
+    // step-end holds each declaration until the next one, giving a clean switch per colour rather
+    // than a fade. Each colour keeps its painted state through to the end of the cycle.
     const keyframes = palette
       .map((entry, index) => {
-        // Index 0 holds the largest share, so it is painted first and wiped last.
-        const paintedAt = hold + index * step;
-        const clearedAt = hold * 2 + passSeconds + (colourCount - 1 - index) * step;
+        // Index 0 holds the largest share of the image, so it is painted first.
+        const paintedAt = asPercent(hold + index * step);
 
-        // step-end means each declaration holds until the next one, giving a clean on/off
-        // transition per colour instead of a fade.
         return (
-          `@keyframes pbn-cycle-${entry.id} { ` +
+          `@keyframes pbn-paint-${entry.id} { ` +
           `0% { opacity: 0; } ` +
-          `${asPercent(paintedAt)}% { opacity: ${PaintEngineService.FILL_OPACITY}; } ` +
-          `${asPercent(clearedAt)}% { opacity: 0; } ` +
+          `${paintedAt}% { opacity: ${PaintEngineService.FILL_OPACITY}; } ` +
+          `} ` +
+          `@keyframes pbn-clear-${entry.id} { ` +
+          `0% { opacity: 1; } ` +
+          `${paintedAt}% { opacity: 0; } ` +
           `}`
         );
       })
       .join(' ');
 
     const assignments = palette
-      .map((entry) => `.${fill}-${entry.id} { animation-name: pbn-cycle-${entry.id}; }`)
+      .map(
+        (entry) =>
+          `.${fill}-${entry.id} { animation-name: pbn-paint-${entry.id}; } ` +
+          `.${outline}-${entry.id}, .${label}-${entry.id} { animation-name: pbn-clear-${entry.id}; }`,
+      )
       .join(' ');
+
+    const timing = `animation-duration: ${totalSeconds}s; animation-timing-function: step-end; animation-iteration-count: infinite;`;
 
     return (
       `<style>` +
-      `.${fill} { opacity: 0; animation-duration: ${totalSeconds}s; animation-timing-function: step-end; animation-iteration-count: infinite; } ` +
+      `.${fill} { opacity: 0; ${timing} } ` +
+      `.${outline}, .${label} { opacity: 1; ${timing} } ` +
       `${keyframes} ${assignments} ` +
-      `.${PaintEngineService.PAUSED_CLASS} .${fill} { animation-play-state: paused; } ` +
-      `@media (prefers-reduced-motion: reduce) { .${fill} { animation: none; opacity: ${PaintEngineService.FILL_OPACITY}; } }` +
+      `.${PaintEngineService.PAUSED_CLASS} .${fill}, ` +
+      `.${PaintEngineService.PAUSED_CLASS} .${outline}, ` +
+      `.${PaintEngineService.PAUSED_CLASS} .${label} { animation-play-state: paused; } ` +
+      `@media (prefers-reduced-motion: reduce) { ` +
+      `.${fill} { animation: none; opacity: ${PaintEngineService.FILL_OPACITY}; } ` +
+      `.${outline}, .${label} { animation: none; opacity: 0; } ` +
+      `}` +
       `</style>\n`
     );
   }

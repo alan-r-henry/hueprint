@@ -12,14 +12,14 @@ function paletteOf(...percentages: number[]): GenerationResult['palette'] {
 }
 
 /**
- * Pulls the keyframe offsets for one colour out of the generated stylesheet.
+ * Returns the opacity stops of one keyframes block, as `[offsetPercent, opacity]` pairs.
  *
  * The block is located by brace matching rather than a regex, because keyframe bodies nest one
  * level of braces and a naive `[^}]*` stops at the first inner close.
  */
-function offsetsFor(css: string, id: number): { painted: number; cleared: number } {
-  const start = css.indexOf(`@keyframes pbn-cycle-${id} {`);
-  if (start === -1) throw new Error(`no keyframes for colour ${id}`);
+function stopsOf(css: string, keyframeName: string): Array<[number, number]> {
+  const start = css.indexOf(`@keyframes ${keyframeName} {`);
+  if (start === -1) throw new Error(`no keyframes named ${keyframeName}`);
 
   let depth = 0;
   let end = -1;
@@ -30,14 +30,26 @@ function offsetsFor(css: string, id: number): { painted: number; cleared: number
       break;
     }
   }
-  if (end === -1) throw new Error(`unterminated keyframes for colour ${id}`);
+  if (end === -1) throw new Error(`unterminated keyframes for ${keyframeName}`);
 
-  const stops = [...css.slice(start, end).matchAll(/([\d.]+)% \{ opacity: ([\d.]+); \}/g)];
-  const painted = stops.find((s) => Number(s[2]) > 0);
-  const cleared = stops.filter((s) => Number(s[2]) === 0).pop();
-  if (!painted || !cleared) throw new Error(`incomplete keyframes for colour ${id}`);
+  return [...css.slice(start, end).matchAll(/([\d.]+)% \{ opacity: ([\d.]+); \}/g)].map((m) => [
+    Number(m[1]),
+    Number(m[2]),
+  ]);
+}
 
-  return { painted: Number(painted[1]), cleared: Number(cleared[1]) };
+/** The offset at which a colour's wash becomes visible. */
+function paintOffset(css: string, id: number): number {
+  const stop = stopsOf(css, `pbn-paint-${id}`).find(([, opacity]) => opacity > 0);
+  if (!stop) throw new Error(`colour ${id} is never painted`);
+  return stop[0];
+}
+
+/** The offset at which a colour's outline and number disappear. */
+function clearOffset(css: string, id: number): number {
+  const stop = stopsOf(css, `pbn-clear-${id}`).find(([, opacity]) => opacity === 0);
+  if (!stop) throw new Error(`colour ${id} never clears its outline`);
+  return stop[0];
 }
 
 describe('PaintEngineService', () => {
@@ -53,67 +65,76 @@ describe('PaintEngineService', () => {
       expect(service.buildPaintAnimationCss([])).toBe('');
     });
 
-    it('runs for three rest periods plus a paint-in and paint-out pass', () => {
-      // 8 colours at one per second span 7 intervals each way, plus 3 x 5s of rest.
+    it('rests empty, paints in at half-second steps, then rests painted', () => {
+      // 8 colours span 7 half-second intervals, plus 5s empty and 5s painted.
       const css = service.buildPaintAnimationCss(paletteOf(30, 20, 15, 10, 9, 8, 5, 3));
-      expect(css).toContain('animation-duration: 29s');
+      expect(css).toContain('animation-duration: 13.5s');
     });
 
-    it('collapses to a single hold-fill-hold cycle for one colour', () => {
+    it('collapses to just the two rest periods for a single colour', () => {
       const css = service.buildPaintAnimationCss(paletteOf(100));
-      expect(css).toContain('animation-duration: 15s');
+      expect(css).toContain('animation-duration: 10s');
     });
 
     it('paints the largest area first and the smallest last', () => {
       const css = service.buildPaintAnimationCss(paletteOf(50, 30, 20));
-      const first = offsetsFor(css, 1);
-      const second = offsetsFor(css, 2);
-      const third = offsetsFor(css, 3);
 
-      expect(first.painted).toBeLessThan(second.painted);
-      expect(second.painted).toBeLessThan(third.painted);
+      expect(paintOffset(css, 1)).toBeLessThan(paintOffset(css, 2));
+      expect(paintOffset(css, 2)).toBeLessThan(paintOffset(css, 3));
     });
 
-    it('clears the smallest area first and the largest last', () => {
-      const css = service.buildPaintAnimationCss(paletteOf(50, 30, 20));
-      const first = offsetsFor(css, 1);
-      const second = offsetsFor(css, 2);
-      const third = offsetsFor(css, 3);
-
-      // The largest share is painted first, so it survives to the end of the wipe.
-      expect(third.cleared).toBeLessThan(second.cleared);
-      expect(second.cleared).toBeLessThan(first.cleared);
-    });
-
-    it('keeps every colour on screen between being painted and being cleared', () => {
+    it('hides each outline and number exactly when its colour is painted', () => {
       const css = service.buildPaintAnimationCss(paletteOf(50, 30, 20));
 
       for (const id of [1, 2, 3]) {
-        const { painted, cleared } = offsetsFor(css, id);
-        expect(painted).toBeGreaterThan(0);
-        expect(cleared).toBeGreaterThan(painted);
-        expect(cleared).toBeLessThan(100);
+        expect(clearOffset(css, id)).toBe(paintOffset(css, id));
       }
     });
 
-    it('opens the cycle with every colour hidden', () => {
-      const css = service.buildPaintAnimationCss(paletteOf(60, 40));
-      expect(css).toContain('0% { opacity: 0; }');
+    it('keeps every colour painted through to the end of the cycle', () => {
+      const css = service.buildPaintAnimationCss(paletteOf(50, 30, 20));
+
+      for (const id of [1, 2, 3]) {
+        const stops = stopsOf(css, `pbn-paint-${id}`);
+        // Only the hidden start and the painted step: nothing sends a colour back to zero.
+        expect(stops.length).toBe(2);
+        expect(stops[stops.length - 1][1]).toBeGreaterThan(0);
+      }
     });
 
-    it('exposes a pause hook and honours reduced-motion preferences', () => {
+    it('opens the cycle empty, with outlines and numbers showing', () => {
       const css = service.buildPaintAnimationCss(paletteOf(60, 40));
-      expect(css).toContain(
-        `.${PaintEngineService.PAUSED_CLASS} .${PaintEngineService.FILL_CLASS}`,
-      );
+
+      expect(stopsOf(css, 'pbn-paint-1')[0]).toEqual([0, 0]);
+      expect(stopsOf(css, 'pbn-clear-1')[0]).toEqual([0, 1]);
+    });
+
+    it('starts painting only after the opening rest', () => {
+      // 3 colours over 11s total; the first colour lands at 5s.
+      const css = service.buildPaintAnimationCss(paletteOf(50, 30, 20));
+      expect(paintOffset(css, 1)).toBeCloseTo((5 / 11) * 100, 3);
+    });
+
+    it('pauses every animated layer through the pause hook', () => {
+      const css = service.buildPaintAnimationCss(paletteOf(60, 40));
+      const paused = PaintEngineService.PAUSED_CLASS;
+
+      expect(css).toContain(`.${paused} .${PaintEngineService.FILL_CLASS}`);
+      expect(css).toContain(`.${paused} .${PaintEngineService.OUTLINE_CLASS}`);
+      expect(css).toContain(`.${paused} .${PaintEngineService.LABEL_CLASS}`);
       expect(css).toContain('animation-play-state: paused');
+    });
+
+    it('settles on the painted result when motion is reduced', () => {
+      const css = service.buildPaintAnimationCss(paletteOf(60, 40));
       expect(css).toContain('prefers-reduced-motion: reduce');
     });
 
-    it('binds one keyframe set per palette entry', () => {
+    it('binds a paint and a clear keyframe set per palette entry', () => {
       const css = service.buildPaintAnimationCss(paletteOf(40, 30, 20, 10));
-      const keyframeCount = [...css.matchAll(/@keyframes pbn-cycle-\d+/g)].length;
-      expect(keyframeCount).toBe(4);
+
+      expect([...css.matchAll(/@keyframes pbn-paint-\d+/g)].length).toBe(4);
+      expect([...css.matchAll(/@keyframes pbn-clear-\d+/g)].length).toBe(4);
     });
   });
 });
