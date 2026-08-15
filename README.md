@@ -1,59 +1,109 @@
-# PaintByNumbers
+# Paint by Numbers
 
-This project was generated using [Angular CLI](https://github.com/angular/angular-cli) version 21.2.11.
+Turn any photograph into a printable paint-by-numbers template — colour-clustered, outlined, numbered, and exported as clean vector SVG. Everything runs in the browser; no image ever leaves your machine.
 
-## Development server
+[![CI](https://github.com/alan-r-henry/paint-by-numbers/actions/workflows/ci.yml/badge.svg)](https://github.com/alan-r-henry/paint-by-numbers/actions/workflows/ci.yml)
+[![Deploy](https://github.com/alan-r-henry/paint-by-numbers/actions/workflows/deploy.yml/badge.svg)](https://github.com/alan-r-henry/paint-by-numbers/actions/workflows/deploy.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Angular](https://img.shields.io/badge/Angular-21-dd0031.svg)](https://angular.dev)
 
-To start a local development server, run:
+**[▶ Try it live](https://alan-r-henry.github.io/paint-by-numbers/)**
+
+---
+
+## What it does
+
+Upload an image and the engine reduces it to a small, paintable palette, then works out where the outlines and numbers belong:
+
+1. **Downsample** — the image is scaled to a bounded dimension so clustering stays responsive.
+2. **Perceptual quantization** — pixels are converted from RGB into [CIELAB](https://en.wikipedia.org/wiki/CIELAB_color_space) and clustered with k-means. LAB is used rather than RGB because Euclidean distance in LAB tracks _perceived_ colour difference, so the resulting palette looks right to the eye instead of merely being numerically close.
+3. **Facet reduction** — connected regions smaller than a threshold are absorbed into their neighbours, removing the speckle that makes a template unpaintable.
+4. **Border tracing** — each remaining region is extracted as a connected component and traced into a path.
+5. **Wavelet smoothing** — the raw integer-step outlines are smoothed into flowing segments.
+6. **Label placement** — a number is positioned inside each region, scaled to the space available.
+
+The result is a layered SVG you can print and paint.
+
+## Inspecting the pipeline
+
+Every intermediate stage is exposed as its own tab, so you can see exactly what each step did:
+
+| Stage         | What you're looking at                         |
+| ------------- | ---------------------------------------------- |
+| **Quantized** | The image reduced to the clustered palette     |
+| **Reduction** | The same image after small facets are absorbed |
+| **Tracing**   | Raw integer-step region outlines               |
+| **Segments**  | Outlines after wavelet smoothing               |
+| **Placement** | Where the numbers land                         |
+| **Final**     | The composited, printable template             |
+
+This makes the app useful as a teaching tool as much as a generator — the failure modes of each algorithm are visible rather than hidden behind a single output.
+
+## Controls
+
+| Parameter           | Range | Default | Effect                                                                                         |
+| ------------------- | ----- | ------- | ---------------------------------------------------------------------------------------------- |
+| `clusterCount`      | 2–24  | 8       | Number of colours in the final palette. Fewer colours means a simpler, more abstract painting. |
+| `minFacetArea`      | 1–100 | 10      | Smallest region kept, in pixels. Raise it to remove fiddly detail.                             |
+| `maxImageDimension` | —     | 600     | Longest edge after downsampling. Higher retains detail but costs processing time.              |
+
+Finished templates export via **Download SVG** as `paint-by-numbers-master.svg`.
+
+## Running locally
+
+Requires Node.js 20 or newer.
 
 ```bash
-ng serve
+git clone https://github.com/alan-r-henry/paint-by-numbers.git
 ```
-
-Once the server is running, open your browser and navigate to `http://localhost:4200/`. The application will automatically reload whenever you modify any of the source files.
-
-## Code scaffolding
-
-Angular CLI includes powerful code scaffolding tools. To generate a new component, run:
 
 ```bash
-ng generate component component-name
+npm ci
 ```
-
-For a complete list of available schematics (such as `components`, `directives`, or `pipes`), run:
 
 ```bash
-ng generate --help
+npm start
 ```
 
-## Building
+Then open <http://localhost:4200/>.
 
-To build the project run:
+### Other commands
+
+Production build:
 
 ```bash
-ng build
+npm run build
 ```
 
-This will compile your project and store the build artifacts in the `dist/` directory. By default, the production build optimizes your application for performance and speed.
-
-## Running unit tests
-
-To execute unit tests with the [Vitest](https://vitest.dev/) test runner, use the following command:
+Unit tests:
 
 ```bash
-ng test
+npm test -- --watch=false
 ```
 
-## Running end-to-end tests
-
-For end-to-end (e2e) testing, run:
+Format the codebase:
 
 ```bash
-ng e2e
+npx prettier --write .
 ```
 
-Angular CLI does not come with an end-to-end testing framework by default. You can choose one that suits your needs.
+## Project structure
 
-## Additional Resources
+```
+src/app/
+├── app.ts                               # Root standalone component
+├── core/
+│   ├── models/types.ts                  # RGB, GeneratorConfig, GenerationResult
+│   └── services/paint-engine.service.ts # The whole image pipeline
+└── features/generator/                  # Upload UI, controls, stage viewer
+```
 
-For more information on using the Angular CLI, including detailed command references, visit the [Angular CLI Overview and Command Reference](https://angular.dev/tools/cli) page.
+The engine is deliberately kept framework-agnostic: `PaintEngineService.processImage(file, config)` takes a `File` and returns a `GenerationResult`, with no Angular-specific types crossing the boundary. It could be lifted into a web worker or a different framework without modification.
+
+## Tech stack
+
+Angular 21 (standalone components, signals) · TypeScript 5.9 · Vitest · SCSS · Canvas 2D API
+
+## Licence
+
+[MIT](LICENSE) © Alan Henry
