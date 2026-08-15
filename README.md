@@ -2,12 +2,12 @@
 
 Turn any photograph into a printable paint-by-numbers template — colour-clustered, outlined, numbered, and exported as clean vector SVG. Everything runs in the browser; no image ever leaves your machine.
 
-[![CI](https://github.com/alan-r-henry/paint-by-numbers/actions/workflows/ci.yml/badge.svg)](https://github.com/alan-r-henry/paint-by-numbers/actions/workflows/ci.yml)
-[![Deploy](https://github.com/alan-r-henry/paint-by-numbers/actions/workflows/deploy.yml/badge.svg)](https://github.com/alan-r-henry/paint-by-numbers/actions/workflows/deploy.yml)
+[![CI](https://github.com/alan-r-henry/hueprint/actions/workflows/ci.yml/badge.svg)](https://github.com/alan-r-henry/hueprint/actions/workflows/ci.yml)
+[![Deploy](https://github.com/alan-r-henry/hueprint/actions/workflows/deploy.yml/badge.svg)](https://github.com/alan-r-henry/hueprint/actions/workflows/deploy.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Angular](https://img.shields.io/badge/Angular-21-dd0031.svg)](https://angular.dev)
 
-**[▶ Try it live](https://alan-r-henry.github.io/paint-by-numbers/)**
+**[▶ Try it live](https://alan-r-henry.github.io/hueprint/)**
 
 ---
 
@@ -64,7 +64,7 @@ Finished templates export via **Download SVG** as `hueprint-template.svg`.
 Requires Node.js 20 or newer.
 
 ```bash
-git clone https://github.com/alan-r-henry/paint-by-numbers.git
+git clone https://github.com/alan-r-henry/hueprint.git
 ```
 
 ```bash
