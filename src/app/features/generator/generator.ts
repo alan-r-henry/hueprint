@@ -114,8 +114,13 @@ export class GeneratorComponent {
     const host = this.finalViewport()?.nativeElement;
     if (!host) return;
 
-    for (const wash of host.querySelectorAll(`.${PaintEngineService.FILL_CLASS}`)) {
-      for (const animation of wash.getAnimations()) {
+    // Washes, outlines and labels are all on the same timeline and must rewind together.
+    const animated = host.querySelectorAll(
+      `.${PaintEngineService.FILL_CLASS}, .${PaintEngineService.OUTLINE_CLASS}, .${PaintEngineService.LABEL_CLASS}`,
+    );
+
+    for (const layer of animated) {
+      for (const animation of layer.getAnimations()) {
         animation.currentTime = 0;
       }
     }
