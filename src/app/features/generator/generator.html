@@ -100,11 +100,9 @@
             @for (item of resultData()?.palette; track item.id) {
               <div class="swatch-item">
                 <div class="color-box" [style.background]="item.hex">
-                  <span
-                    class="color-label"
-                    [style.color]="item.percentage > 50 ? '#fff' : '#000'"
-                    >{{ item.id }}</span
-                  >
+                  <span class="color-label" [style.color]="swatchTextColor(item.hex)">{{
+                    item.id
+                  }}</span>
                 </div>
                 <div class="swatch-stats">
                   <span class="hex-text">{{ item.hex }}</span
