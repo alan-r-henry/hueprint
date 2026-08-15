@@ -511,12 +511,11 @@ export class PaintEngineService {
       const x = idx % width;
       const y = Math.floor(idx / width);
 
-      if (!isMember(x, y - 1) && y > 0) pathString += `M ${x} ${y} L ${x + 1} ${y} `;
-      if (!isMember(x + 1, y) && x < width - 1)
-        pathString += `M ${x + 1} ${y} L ${x + 1} ${y + 1} `;
-      if (!isMember(x, y + 1) && y < height - 1)
-        pathString += `M ${x + 1} ${y + 1} L ${x} ${y + 1} `;
-      if (!isMember(x - 1, y) && x > 0) pathString += `M ${x} ${y + 1} L ${x} ${y} `;
+      // Frame edges included, so this diagnostic view matches the smoothed output it precedes.
+      if (!isMember(x, y - 1)) pathString += `M ${x} ${y} L ${x + 1} ${y} `;
+      if (!isMember(x + 1, y)) pathString += `M ${x + 1} ${y} L ${x + 1} ${y + 1} `;
+      if (!isMember(x, y + 1)) pathString += `M ${x + 1} ${y + 1} L ${x} ${y + 1} `;
+      if (!isMember(x - 1, y)) pathString += `M ${x} ${y + 1} L ${x} ${y} `;
     }
     return pathString.trim();
   }
@@ -545,66 +544,94 @@ export class PaintEngineService {
     for (const idx of indices) {
       const x = idx % width;
       const y = Math.floor(idx / width);
-      if (!isMember(x, y - 1) && y > 0) segments.push({ x1: x, y1: y, x2: x + 1, y2: y });
-      if (!isMember(x + 1, y) && x < width - 1)
-        segments.push({ x1: x + 1, y1: y, x2: x + 1, y2: y + 1 });
-      if (!isMember(x, y + 1) && y < height - 1)
-        segments.push({ x1: x + 1, y1: y + 1, x2: x, y2: y + 1 });
-      if (!isMember(x - 1, y) && x > 0) segments.push({ x1: x, y1: y + 1, x2: x, y2: y });
+      // Edges lying on the image frame are emitted like any other. Suppressing them (to avoid
+      // drawing a border around the picture) left every region that touches the frame with an
+      // unclosed boundary: its path enclosed the wrong area, its fill did not cover it, and a
+      // region bounded entirely by the frame collapsed to a zero-height line.
+      if (!isMember(x, y - 1)) segments.push({ x1: x, y1: y, x2: x + 1, y2: y });
+      if (!isMember(x + 1, y)) segments.push({ x1: x + 1, y1: y, x2: x + 1, y2: y + 1 });
+      if (!isMember(x, y + 1)) segments.push({ x1: x + 1, y1: y + 1, x2: x, y2: y + 1 });
+      if (!isMember(x - 1, y)) segments.push({ x1: x, y1: y + 1, x2: x, y2: y });
     }
 
     if (segments.length === 0) return '';
 
-    // Stitch the loose unit-length border segments into continuous chains by repeatedly looking for
-    // a segment that touches either end of the chain being built.
+    // Stitch the loose unit-length border segments into continuous chains.
     //
-    // PERFORMANCE: this rescans the whole segment list on every extension, making it O(n^2) in the
-    // number of border segments. It is the dominant cost of a run on a large or detailed image.
-    // Indexing segments by their endpoints would make each lookup constant time; left as-is for now
-    // because it changes the order chains are assembled in, which needs a visual regression check.
+    // The border of a filled region is always a set of closed loops, so every vertex has an even
+    // number of segments meeting it and walking forward from any segment returns to where it
+    // started. Segments are indexed by both endpoints, which makes each extension a hash lookup
+    // rather than a scan of the whole list -- this used to be O(n^2) and was the dominant cost of
+    // a run on a detailed image.
+    //
+    // Nothing is discarded. The previous version dropped any chain of two points or fewer, which
+    // silently deleted real boundary wherever a walk terminated early -- at a pinch point, where
+    // four segments meet and the continuation had already been consumed by an earlier chain. The
+    // result was a facet drawn with gaps in its outline, unclosed, and not matching the pixels the
+    // label was positioned from.
+    const pointKey = (px: number, py: number) => `${px},${py}`;
+    const segmentsAtPoint = new Map<string, number[]>();
+
+    segments.forEach((seg, i) => {
+      for (const k of [pointKey(seg.x1, seg.y1), pointKey(seg.x2, seg.y2)]) {
+        const bucket = segmentsAtPoint.get(k);
+        if (bucket) bucket.push(i);
+        else segmentsAtPoint.set(k, [i]);
+      }
+    });
+
     const chains: Point[][] = [];
     const used = new Uint8Array(segments.length);
+
+    /** First still-unused segment touching a point, or -1. Buckets hold at most four entries. */
+    const unusedSegmentAt = (p: Point): number => {
+      const bucket = segmentsAtPoint.get(pointKey(p.x, p.y));
+      if (!bucket) return -1;
+      for (const j of bucket) if (!used[j]) return j;
+      return -1;
+    };
+
+    const isLoopClosed = (chain: Point[]) =>
+      chain.length > 2 &&
+      chain[0].x === chain[chain.length - 1].x &&
+      chain[0].y === chain[chain.length - 1].y;
 
     for (let i = 0; i < segments.length; i++) {
       if (used[i]) continue;
       used[i] = 1;
-      const currentChain: Point[] = [
+
+      const chain: Point[] = [
         { x: segments[i].x1, y: segments[i].y1 },
         { x: segments[i].x2, y: segments[i].y2 },
       ];
 
-      let extended = true;
-      while (extended) {
-        extended = false;
-        const firstPt = currentChain[0];
-        const lastPt = currentChain[currentChain.length - 1];
+      // Grow from the tail, then from the head. Both directions are required: the segment array is
+      // built in raster order, which does not follow the loop, so a tail-only walk stops dead
+      // whenever the neighbouring segment happens to join at the head instead.
+      for (;;) {
+        const tail = chain[chain.length - 1];
+        const j = unusedSegmentAt(tail);
+        if (j === -1) break;
 
-        for (let j = 0; j < segments.length; j++) {
-          if (used[j]) continue;
-          if (segments[j].x1 === lastPt.x && segments[j].y1 === lastPt.y) {
-            currentChain.push({ x: segments[j].x2, y: segments[j].y2 });
-            used[j] = 1;
-            extended = true;
-            break;
-          } else if (segments[j].x2 === lastPt.x && segments[j].y2 === lastPt.y) {
-            currentChain.push({ x: segments[j].x1, y: segments[j].y1 });
-            used[j] = 1;
-            extended = true;
-            break;
-          } else if (segments[j].x2 === firstPt.x && segments[j].y2 === firstPt.y) {
-            currentChain.unshift({ x: segments[j].x1, y: segments[j].y1 });
-            used[j] = 1;
-            extended = true;
-            break;
-          } else if (segments[j].x1 === firstPt.x && segments[j].y1 === firstPt.y) {
-            currentChain.unshift({ x: segments[j].x2, y: segments[j].y2 });
-            used[j] = 1;
-            extended = true;
-            break;
-          }
-        }
+        used[j] = 1;
+        const seg = segments[j];
+        const joinsAtStart = seg.x1 === tail.x && seg.y1 === tail.y;
+        chain.push(joinsAtStart ? { x: seg.x2, y: seg.y2 } : { x: seg.x1, y: seg.y1 });
+        if (isLoopClosed(chain)) break;
       }
-      if (currentChain.length > 2) chains.push(currentChain);
+
+      while (!isLoopClosed(chain)) {
+        const head = chain[0];
+        const j = unusedSegmentAt(head);
+        if (j === -1) break;
+
+        used[j] = 1;
+        const seg = segments[j];
+        const joinsAtStart = seg.x1 === head.x && seg.y1 === head.y;
+        chain.unshift(joinsAtStart ? { x: seg.x2, y: seg.y2 } : { x: seg.x1, y: seg.y1 });
+      }
+
+      chains.push(chain);
     }
 
     /**
