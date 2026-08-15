@@ -52,6 +52,7 @@ Hovering the download button clears it back to the empty template and holds it t
 | `clusterCount`      | 2–24  | 8       | Number of colours in the final palette. Fewer colours means a simpler, more abstract painting. |
 | `minFacetArea`      | 1–100 | 10      | Smallest region kept, in pixels. Raise it to remove fiddly detail.                             |
 | `maxImageDimension` | —     | 600     | Longest edge after downsampling. Higher retains detail but costs processing time.              |
+| `borderWidth`       | 0.1–2 | 0.3     | Outline thickness in image pixels. Thicker is easier to paint up to but swallows small facets. |
 | `borderColor`       | —     | #444444 | Colour of the facet outlines. Lighter values disappear under the finished paint.               |
 | `labelColor`        | —     | #111111 | Colour of the facet numbers. Same trade-off as the borders.                                    |
 

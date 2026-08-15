@@ -143,7 +143,7 @@ export class PaintEngineService {
     // Font size is deliberately omitted so each label can be scaled inline to the facet it sits in.
     const styleBase =
       `<style>` +
-      `.${root} path { stroke: ${config.borderColor}; stroke-width: 0.3px; stroke-linejoin: round; stroke-linecap: round; fill: none; } ` +
+      `.${root} path { stroke: ${config.borderColor}; stroke-width: ${config.borderWidth}px; stroke-linejoin: round; stroke-linecap: round; fill: none; } ` +
       `.${root} text { font-family: system-ui, sans-serif; font-weight: 700; fill: ${config.labelColor}; text-anchor: middle; dominant-baseline: central; }` +
       `</style>\n`;
 

@@ -21,6 +21,15 @@ export interface GeneratorConfig {
 
   /** Colour of the facet numbers. Same trade-off as {@link borderColor}. */
   labelColor: string;
+
+  /**
+   * Outline thickness, in image pixels at the downsampled size.
+   *
+   * Thin lines print crisply but can be hard to follow on a busy template; thick lines are easier
+   * to paint up to but swallow small facets. Also sets the width of the matching stroke on each
+   * colour wash, so a painted facet still covers the space its outline occupied.
+   */
+  borderWidth: number;
 }
 
 export interface GenerationResult {

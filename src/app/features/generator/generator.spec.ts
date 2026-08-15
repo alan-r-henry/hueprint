@@ -27,7 +27,15 @@ describe('GeneratorComponent', () => {
       maxImageDimension: 600,
       borderColor: '#444444',
       labelColor: '#111111',
+      borderWidth: 0.3,
     });
+  });
+
+  it('should update the border thickness from a range input', () => {
+    const event = { target: { value: '1.4' } } as unknown as Event;
+    component.updateConfig('borderWidth', event);
+
+    expect(component.config().borderWidth).toBe(1.4);
   });
 
   it('should update a guide colour without disturbing the other settings', () => {
