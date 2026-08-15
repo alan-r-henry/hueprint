@@ -1,0 +1,12 @@
+# Normalise line endings to LF in the repository and the working tree, so
+# Windows checkouts and Linux CI agree with Prettier's endOfLine setting.
+* text=auto eol=lf
+
+# Binary assets must never be converted.
+*.ico binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.svg text eol=lf

@@ -6,6 +6,6 @@ import { GeneratorComponent } from './features/generator/generator';
   standalone: true,
   imports: [GeneratorComponent],
   templateUrl: './app.html',
-  styleUrl: './app.scss'
+  styleUrl: './app.scss',
 })
 export class App {}
