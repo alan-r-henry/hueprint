@@ -6,7 +6,7 @@
   },
   "newProjectRoot": "projects",
   "projects": {
-    "paint-by-numbers": {
+    "hueprint": {
       "projectType": "application",
       "schematics": {
         "@schematics/angular:component": {
@@ -59,10 +59,10 @@
           "builder": "@angular/build:dev-server",
           "configurations": {
             "production": {
-              "buildTarget": "paint-by-numbers:build:production"
+              "buildTarget": "hueprint:build:production"
             },
             "development": {
-              "buildTarget": "paint-by-numbers:build:development"
+              "buildTarget": "hueprint:build:development"
             }
           },
           "defaultConfiguration": "development"

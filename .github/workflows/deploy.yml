@@ -31,15 +31,15 @@ jobs:
         run: npm ci
 
       - name: Build
-        run: npm run build -- --base-href=/paint-by-numbers/
+        run: npm run build -- --base-href=/hueprint/
 
       - name: Add SPA fallback
-        run: cp dist/paint-by-numbers/browser/index.html dist/paint-by-numbers/browser/404.html
+        run: cp dist/hueprint/browser/index.html dist/hueprint/browser/404.html
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: dist/paint-by-numbers/browser
+          path: dist/hueprint/browser
 
   deploy:
     name: Deploy
