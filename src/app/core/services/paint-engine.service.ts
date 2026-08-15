@@ -38,6 +38,21 @@ export class PaintEngineService {
   /** Seconds between one colour being added or removed and the next. */
   private static readonly STEP_SECONDS = 1;
 
+  /** Maximum k-means refinement passes before the current centroids are accepted. */
+  private static readonly KMEANS_MAX_ITERATIONS = 15;
+
+  /** Centroid movement in LAB units below which k-means is treated as converged. */
+  private static readonly KMEANS_CONVERGENCE_DELTA = 0.1;
+
+  /**
+   * Maximum absorb passes when culling facets under the area threshold. Absorbing one facet can
+   * push a neighbour under the threshold too, so the pass repeats until nothing moves.
+   */
+  private static readonly FACET_REDUCTION_PASSES = 4;
+
+  /** Averaging passes applied to each traced boundary to soften the pixel staircase. */
+  private static readonly BOUNDARY_SMOOTHING_PASSES = 3;
+
   public async processImage(file: File, config: GeneratorConfig): Promise<GenerationResult> {
     const img = await this.loadImage(file);
     const canvas = document.createElement('canvas');
@@ -486,6 +501,13 @@ export class PaintEngineService {
 
     if (segments.length === 0) return '';
 
+    // Stitch the loose unit-length border segments into continuous chains by repeatedly looking for
+    // a segment that touches either end of the chain being built.
+    //
+    // PERFORMANCE: this rescans the whole segment list on every extension, making it O(n^2) in the
+    // number of border segments. It is the dominant cost of a run on a large or detailed image.
+    // Indexing segments by their endpoints would make each lookup constant time; left as-is for now
+    // because it changes the order chains are assembled in, which needs a visual regression check.
     const chains: Point[][] = [];
     const used = new Uint8Array(segments.length);
 
@@ -531,6 +553,11 @@ export class PaintEngineService {
       if (currentChain.length > 2) chains.push(currentChain);
     }
 
+    /**
+     * A point is a junction when three or more clusters meet at it, or when it sits on the image
+     * edge. Junctions are pinned during smoothing: moving them would pull the shared borders of
+     * adjacent facets apart and leave visible gaps between regions that should touch exactly.
+     */
     const isTrueJunction = (pt: Point): boolean => {
       if (pt.x <= 0 || pt.x >= width || pt.y <= 0 || pt.y >= height) return true;
       const uniqueColors = new Set<number>();
@@ -553,9 +580,10 @@ export class PaintEngineService {
       const isClosed =
         chain[0].x === chain[chain.length - 1].x && chain[0].y === chain[chain.length - 1].y;
       let smoothedChain = [...chain];
-      const smoothingIterations = 3;
 
-      for (let iter = 0; iter < smoothingIterations; iter++) {
+      // Each pass replaces a point with a weighted average of itself and its two neighbours
+      // (1:2:1), which rounds off the single-pixel staircase left by the integer tracing step.
+      for (let iter = 0; iter < PaintEngineService.BOUNDARY_SMOOTHING_PASSES; iter++) {
         const nextChain: Point[] = [];
         const len = smoothedChain.length;
 
@@ -595,10 +623,17 @@ export class PaintEngineService {
   // CORE QUANTIZATION & COLOR SPACE MATH
   // =========================================================================
 
+  /**
+   * Absorbs facets smaller than `minArea` into whichever neighbouring cluster they share the most
+   * border with, removing the speckle that would otherwise produce unpaintable one-pixel regions.
+   *
+   * Runs repeatedly because absorbing a facet can merge two regions and drop a neighbour below the
+   * threshold in turn. Stops early once a pass changes nothing.
+   */
   private reduceFacets(labels: Int32Array, width: number, height: number, minArea: number): void {
     const totalPixels = width * height;
     const visited = new Uint8Array(totalPixels);
-    for (let pass = 0; pass < 4; pass++) {
+    for (let pass = 0; pass < PaintEngineService.FACET_REDUCTION_PASSES; pass++) {
       let absorbedCount = 0;
       visited.fill(0);
       for (let y = 0; y < height; y++) {
@@ -657,11 +692,31 @@ export class PaintEngineService {
     }
   }
 
+  /**
+   * Groups pixels into k colour clusters by Lloyd's algorithm, working in LAB so that distance
+   * between two colours matches how different they look rather than how different their RGB
+   * numbers are.
+   *
+   * Seeds are picked at random but de-duplicated: two identical seeds collapse into one cluster and
+   * leave the user with fewer colours than they asked for, which is very likely on images with
+   * large flat areas where the same colour dominates the sample.
+   */
   private runKMeansLab(pixels: LAB[], k: number): LAB[] {
     const centroids: LAB[] = [];
-    for (let i = 0; i < k; i++)
-      centroids.push({ ...pixels[Math.floor(Math.random() * pixels.length)] });
-    for (let iter = 0; iter < 15; iter++) {
+    const seen = new Set<string>();
+
+    // Try to find k distinct seeds, but never spin forever on an image with fewer than k colours.
+    for (let attempt = 0; attempt < pixels.length && centroids.length < k; attempt++) {
+      const candidate = pixels[Math.floor(Math.random() * pixels.length)];
+      const key = `${candidate.l}|${candidate.a}|${candidate.b}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      centroids.push({ ...candidate });
+    }
+    // Fall back to duplicating a seed if the image genuinely has fewer distinct colours than k.
+    while (centroids.length < k) centroids.push({ ...pixels[0] });
+
+    for (let iter = 0; iter < PaintEngineService.KMEANS_MAX_ITERATIONS; iter++) {
       const sums = Array.from({ length: k }, () => ({ l: 0, a: 0, b: 0, count: 0 }));
       for (const p of pixels) {
         let minDist = Infinity;
@@ -684,10 +739,11 @@ export class PaintEngineService {
           const nl = sums[c].l / sums[c].count;
           const na = sums[c].a / sums[c].count;
           const nb = sums[c].b / sums[c].count;
+          const delta = PaintEngineService.KMEANS_CONVERGENCE_DELTA;
           if (
-            Math.abs(centroids[c].l - nl) > 0.1 ||
-            Math.abs(centroids[c].a - na) > 0.1 ||
-            Math.abs(centroids[c].b - nb) > 0.1
+            Math.abs(centroids[c].l - nl) > delta ||
+            Math.abs(centroids[c].a - na) > delta ||
+            Math.abs(centroids[c].b - nb) > delta
           )
             moved = true;
           centroids[c] = { l: nl, a: na, b: nb };
@@ -698,6 +754,12 @@ export class PaintEngineService {
     return centroids;
   }
 
+  /**
+   * Converts sRGB to CIELAB via XYZ, using the D65 white point (95.047, 100, 108.883).
+   *
+   * The first step undoes the sRGB gamma curve so the channel values are linear light, which is
+   * what the XYZ matrix expects. Skipping it is the usual cause of muddy quantization results.
+   */
   private rgbToLab(color: RGB): LAB {
     let r = color.r / 255;
     let g = color.g / 255;
@@ -720,6 +782,10 @@ export class PaintEngineService {
     return { l: 116 * py - 16, a: 500 * (px - py), b: 200 * (py - pz) };
   }
 
+  /**
+   * Inverse of rgbToLab. Channels are clamped to 0-255 because a LAB centroid averaged from real
+   * pixels can land just outside the sRGB gamut.
+   */
   private labToRgb(lab: LAB): RGB {
     let py = (lab.l + 16) / 116;
     let px = lab.a / 500 + py;
@@ -755,7 +821,11 @@ export class PaintEngineService {
     const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
-    const imgData = canvas.getContext('2d')!.createImageData(width, height);
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Failed to access 2D context');
+
+    const imgData = ctx.createImageData(width, height);
     const d = imgData.data;
     for (let i = 0; i < labels.length; i++) {
       const c = palette[labels[i]];
@@ -765,7 +835,7 @@ export class PaintEngineService {
       d[offset + 2] = c.b;
       d[offset + 3] = 255;
     }
-    canvas.getContext('2d')!.putImageData(imgData, 0, 0);
+    ctx.putImageData(imgData, 0, 0);
     return canvas.toDataURL();
   }
 
