@@ -17,6 +17,27 @@ interface Point {
   providedIn: 'root',
 })
 export class PaintEngineService {
+  /** Scopes every generated stylesheet rule to the SVG that owns it. */
+  public static readonly ROOT_CLASS = 'pbn-root';
+
+  /** Applied to each colour wash path in the final composite, alongside `pbn-fill-{colourId}`. */
+  public static readonly FILL_CLASS = 'pbn-fill';
+
+  /**
+   * Set on an ancestor of the SVG to freeze the painting animation in place.
+   * The view toggles this while the download control is hovered or focused.
+   */
+  public static readonly PAUSED_CLASS = 'pbn-paused';
+
+  /** Resting opacity of a colour wash once it has been painted in. */
+  private static readonly FILL_OPACITY = 0.6;
+
+  /** Seconds the animation rests at the start, when fully painted, and when fully cleared. */
+  private static readonly HOLD_SECONDS = 5;
+
+  /** Seconds between one colour being added or removed and the next. */
+  private static readonly STEP_SECONDS = 1;
+
   public async processImage(file: File, config: GeneratorConfig): Promise<GenerationResult> {
     const img = await this.loadImage(file);
     const canvas = document.createElement('canvas');
@@ -76,9 +97,15 @@ export class PaintEngineService {
       frequencyMap.set(labels[i], (frequencyMap.get(labels[i]) || 0) + 1);
     }
 
-    const svgHeader = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" width="100%" height="100%">\n`;
-    // Strip fixed font-size strings from baseline styles to allow inline programmatic text scaling
-    const styleBase = `<style>path { stroke: #444444; stroke-width: 0.3px; stroke-linejoin: round; stroke-linecap: round; fill: none; } text { font-family: system-ui, sans-serif; font-weight: 700; fill: #111; text-anchor: middle; dominant-baseline: central; }</style>\n`;
+    // The root class scopes every rule below. An inline <style> inside an inline SVG is applied
+    // document-wide, so unscoped `path`/`text` selectors would restyle every other SVG on the page.
+    const svgHeader = `<svg xmlns="http://www.w3.org/2000/svg" class="${PaintEngineService.ROOT_CLASS}" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" width="100%" height="100%">\n`;
+    // Font size is deliberately omitted so each label can be scaled inline to the facet it sits in.
+    const styleBase =
+      `<style>` +
+      `.${PaintEngineService.ROOT_CLASS} path { stroke: #444444; stroke-width: 0.3px; stroke-linejoin: round; stroke-linecap: round; fill: none; } ` +
+      `.${PaintEngineService.ROOT_CLASS} text { font-family: system-ui, sans-serif; font-weight: 700; fill: #111; text-anchor: middle; dominant-baseline: central; }` +
+      `</style>\n`;
 
     let tracingSvgContent = '';
     let smoothedSegmentsContent = '';
@@ -186,11 +213,20 @@ export class PaintEngineService {
           placementElements += `  <rect x="${labelBox.x}" y="${labelBox.y}" width="${labelBox.size}" height="${labelBox.size}" fill="#ff0000" opacity="0.4" stroke="#cc0000" stroke-width="0.2px" />\n`;
           placementElements += `  <circle cx="${labelX}" cy="${labelY}" r="0.4" fill="#0000ff" />\n`;
 
-          // Compile Master SVG Layer Output featuring inline dynamically scaled font configurations
+          // Compile the master SVG layer: colour wash, outline, then the label on top.
+          //
+          // The colour is written as an inline `style` rather than a `fill` attribute on purpose.
+          // Presentation attributes sit at the very bottom of the cascade, so the `fill: none` rule
+          // in styleBase above would override a `fill="..."` attribute and the wash would never
+          // render. An inline style declaration outranks that rule.
+          //
+          // Each wash also carries a per-colour class so the view layer can drive the painting
+          // animation without re-parsing path data. See buildPaintAnimationCss().
+          const colourId = targetCluster + 1;
           finalCompositeLayers += `  <g>\n`;
-          finalCompositeLayers += `    <path d="${smoothedPathData}" fill="${fillHex}" fill-rule="evenodd" opacity="0.6" />\n`;
+          finalCompositeLayers += `    <path class="${PaintEngineService.FILL_CLASS} ${PaintEngineService.FILL_CLASS}-${colourId}" d="${smoothedPathData}" style="fill: ${fillHex}" fill-rule="evenodd" opacity="${PaintEngineService.FILL_OPACITY}" />\n`;
           finalCompositeLayers += `    <path d="${smoothedPathData}" />\n`;
-          finalCompositeLayers += `    <text x="${labelX.toFixed(2)}" y="${labelY.toFixed(2)}" font-size="${calculatedFontSize}px">${targetCluster + 1}</text>\n`;
+          finalCompositeLayers += `    <text x="${labelX.toFixed(2)}" y="${labelY.toFixed(2)}" font-size="${calculatedFontSize}px">${colourId}</text>\n`;
           finalCompositeLayers += `  </g>\n`;
         }
 
@@ -225,6 +261,80 @@ export class PaintEngineService {
       finalSvg,
       palette: finalPalette,
     };
+  }
+
+  // =========================================================================
+  // PAINTING ANIMATION
+  // =========================================================================
+
+  /**
+   * Builds the display-only stylesheet that animates the final composite being painted in.
+   *
+   * For K colours ordered from the largest share of the image to the smallest, one cycle runs:
+   *
+   *   hold empty (5s)
+   *     -> add one colour per second, largest area first        (K seconds)
+   *   hold fully painted (5s)
+   *     -> remove one colour per second, smallest area first    (K seconds)
+   *   hold empty (5s), then repeat forever
+   *
+   * Each wash is driven by its own keyframes rather than a JavaScript timer. The browser owns the
+   * timing, nothing has to be torn down when the component is destroyed, and the whole sequence
+   * can be frozen by toggling a single class on any ancestor.
+   *
+   * This is deliberately NOT baked into GenerationResult.finalSvg. That string is what the user
+   * downloads, and a template meant for printing must be static and fully coloured.
+   *
+   * @param palette Palette from a GenerationResult, ordered by descending percentage.
+   * @returns An SVG `<style>` element, or an empty string when there is nothing to animate.
+   */
+  public buildPaintAnimationCss(palette: GenerationResult['palette']): string {
+    const colourCount = palette.length;
+    if (colourCount === 0) return '';
+
+    const hold = PaintEngineService.HOLD_SECONDS;
+    const step = PaintEngineService.STEP_SECONDS;
+    const fill = PaintEngineService.FILL_CLASS;
+
+    // K colours applied one per second span K-1 intervals, not K: the first lands the instant the
+    // opening rest ends and the last lands when the pass is complete. Counting K here would add a
+    // spurious extra second to every rest period.
+    const passSeconds = (colourCount - 1) * step;
+
+    // Three rest periods (start, fully painted, fully cleared) plus a paint-in and a paint-out pass.
+    const totalSeconds = hold * 3 + passSeconds * 2;
+    const asPercent = (seconds: number) => Number(((seconds / totalSeconds) * 100).toFixed(4));
+
+    const keyframes = palette
+      .map((entry, index) => {
+        // Index 0 holds the largest share, so it is painted first and wiped last.
+        const paintedAt = hold + index * step;
+        const clearedAt = hold * 2 + passSeconds + (colourCount - 1 - index) * step;
+
+        // step-end means each declaration holds until the next one, giving a clean on/off
+        // transition per colour instead of a fade.
+        return (
+          `@keyframes pbn-cycle-${entry.id} { ` +
+          `0% { opacity: 0; } ` +
+          `${asPercent(paintedAt)}% { opacity: ${PaintEngineService.FILL_OPACITY}; } ` +
+          `${asPercent(clearedAt)}% { opacity: 0; } ` +
+          `}`
+        );
+      })
+      .join(' ');
+
+    const assignments = palette
+      .map((entry) => `.${fill}-${entry.id} { animation-name: pbn-cycle-${entry.id}; }`)
+      .join(' ');
+
+    return (
+      `<style>` +
+      `.${fill} { opacity: 0; animation-duration: ${totalSeconds}s; animation-timing-function: step-end; animation-iteration-count: infinite; } ` +
+      `${keyframes} ${assignments} ` +
+      `.${PaintEngineService.PAUSED_CLASS} .${fill} { animation-play-state: paused; } ` +
+      `@media (prefers-reduced-motion: reduce) { .${fill} { animation: none; opacity: ${PaintEngineService.FILL_OPACITY}; } }` +
+      `</style>\n`
+    );
   }
 
   // =========================================================================

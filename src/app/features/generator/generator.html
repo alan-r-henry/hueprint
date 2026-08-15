@@ -146,7 +146,16 @@
             </button>
           </div>
           @if (resultData()) {
-            <button class="action-btn download-btn" (click)="downloadSVG()">
+            <!-- Hovering or focusing this control freezes the painting animation on the final
+                 output, so the template holds still while the user reaches for it. -->
+            <button
+              class="action-btn download-btn"
+              (click)="downloadSVG()"
+              (mouseenter)="setPaintAnimationPaused(true)"
+              (mouseleave)="setPaintAnimationPaused(false)"
+              (focus)="setPaintAnimationPaused(true)"
+              (blur)="setPaintAnimationPaused(false)"
+            >
               Download SVG Output
             </button>
           }
@@ -156,6 +165,10 @@
             <div class="loading-state">
               <div class="spinner"></div>
               <p>Processing algorithmic graphic steps...</p>
+            </div>
+          } @else if (errorMessage()) {
+            <div class="error-state" role="alert">
+              <p>{{ errorMessage() }}</p>
             </div>
           } @else if (resultData()) {
             @if (activeTab() === 'quantized') {
@@ -173,7 +186,12 @@
             } @else if (activeTab() === 'placement') {
               <div class="svg-container" [innerHTML]="safePlacementSvg()"></div>
             } @else if (activeTab() === 'final') {
-              <div class="svg-container" [innerHTML]="safeFinalSvg()"></div>
+              <div
+                #finalViewport
+                class="svg-container"
+                [class.pbn-paused]="isPaintAnimationPaused()"
+                [innerHTML]="safeFinalSvg()"
+              ></div>
             }
           } @else {
             <div class="empty-state">
