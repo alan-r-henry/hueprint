@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Paint by numbers template">
+  <defs>
+    <clipPath id="rounded">
+      <rect width="64" height="64" rx="13" />
+    </clipPath>
+  </defs>
+  <g clip-path="url(#rounded)">
+    <!-- Sky, sun and two hills: a miniature template, with the white separating
+         lines standing in for the facet borders the app traces. -->
+    <rect width="64" height="64" fill="#cfe4f5" />
+    <circle cx="46" cy="18" r="9.5" fill="#f5c945" stroke="#ffffff" stroke-width="2.6" />
+    <path
+      d="M-2 43 Q14 29 30 41 Q45 51 66 36 L66 66 L-2 66 Z"
+      fill="#4a9d5f"
+      stroke="#ffffff"
+      stroke-width="2.6"
+    />
+    <path
+      d="M-2 55 Q18 46 36 56 Q52 63 66 55 L66 66 L-2 66 Z"
+      fill="#2f6b40"
+      stroke="#ffffff"
+      stroke-width="2.6"
+    />
+    <text
+      x="17"
+      y="24"
+      font-family="system-ui, -apple-system, Segoe UI, sans-serif"
+      font-size="17"
+      font-weight="700"
+      fill="#2f6fb3"
+      text-anchor="middle"
+      dominant-baseline="central"
+    >
+      3
+    </text>
+  </g>
+</svg>
