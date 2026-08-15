@@ -321,6 +321,51 @@
   }
 }
 
+/* Guide colour pickers: outline and number colours for the printable template */
+.color-group {
+  margin-bottom: 20px;
+
+  .slider-header {
+    display: flex;
+    align-items: center;
+    font-size: 14px;
+    font-weight: 500;
+    margin-bottom: 8px;
+  }
+
+  .color-row {
+    display: flex;
+    gap: 12px;
+  }
+
+  .color-field {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: #4b5563;
+    cursor: pointer;
+
+    input[type='color'] {
+      width: 34px;
+      height: 28px;
+      padding: 0;
+      border: 1px solid #d1d5db;
+      border-radius: 4px;
+      background: none;
+      cursor: pointer;
+    }
+  }
+
+  .helper-text {
+    display: block;
+    font-size: 12px;
+    color: #9ca3af;
+    margin-top: 8px;
+  }
+}
+
 .action-btn {
   width: 100%;
   padding: 12px 16px;

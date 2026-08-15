@@ -120,12 +120,13 @@ export class PaintEngineService {
 
     // The root class scopes every rule below. An inline <style> inside an inline SVG is applied
     // document-wide, so unscoped `path`/`text` selectors would restyle every other SVG on the page.
-    const svgHeader = `<svg xmlns="http://www.w3.org/2000/svg" class="${PaintEngineService.ROOT_CLASS}" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" width="100%" height="100%">\n`;
+    const root = PaintEngineService.ROOT_CLASS;
+    const svgHeader = `<svg xmlns="http://www.w3.org/2000/svg" class="${root}" viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" width="100%" height="100%">\n`;
     // Font size is deliberately omitted so each label can be scaled inline to the facet it sits in.
     const styleBase =
       `<style>` +
-      `.${PaintEngineService.ROOT_CLASS} path { stroke: #444444; stroke-width: 0.3px; stroke-linejoin: round; stroke-linecap: round; fill: none; } ` +
-      `.${PaintEngineService.ROOT_CLASS} text { font-family: system-ui, sans-serif; font-weight: 700; fill: #111; text-anchor: middle; dominant-baseline: central; }` +
+      `.${root} path { stroke: ${config.borderColor}; stroke-width: 0.3px; stroke-linejoin: round; stroke-linecap: round; fill: none; } ` +
+      `.${root} text { font-family: system-ui, sans-serif; font-weight: 700; fill: ${config.labelColor}; text-anchor: middle; dominant-baseline: central; }` +
       `</style>\n`;
 
     let tracingSvgContent = '';

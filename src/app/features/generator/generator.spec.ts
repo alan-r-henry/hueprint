@@ -25,7 +25,18 @@ describe('GeneratorComponent', () => {
       clusterCount: 8,
       minFacetArea: 10,
       maxImageDimension: 600,
+      borderColor: '#444444',
+      labelColor: '#111111',
     });
+  });
+
+  it('should update a guide colour without disturbing the other settings', () => {
+    const event = { target: { value: '#cccccc' } } as unknown as Event;
+    component.updateConfigColor('labelColor', event);
+
+    expect(component.config().labelColor).toBe('#cccccc');
+    expect(component.config().borderColor).toBe('#444444');
+    expect(component.config().clusterCount).toBe(8);
   });
 
   it('should not be processing before a file is chosen', () => {
