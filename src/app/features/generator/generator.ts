@@ -46,6 +46,8 @@ export class GeneratorComponent {
     clusterCount: 8,
     minFacetArea: 10,
     maxImageDimension: 600,
+    borderColor: '#444444',
+    labelColor: '#111111',
   });
 
   safeTracingSvg = computed(() => this.trustSvg(this.resultData()?.tracingSvg));
@@ -81,8 +83,15 @@ export class GeneratorComponent {
     reader.readAsDataURL(file);
   }
 
-  updateConfig(key: keyof GeneratorConfig, event: Event): void {
+  /** Updates a numeric setting from a range or number input. */
+  updateConfig(key: 'clusterCount' | 'minFacetArea' | 'maxImageDimension', event: Event): void {
     const value = Number((event.target as HTMLInputElement).value);
+    this.config.update((curr) => ({ ...curr, [key]: value }));
+  }
+
+  /** Updates a guide colour from a colour input. */
+  updateConfigColor(key: 'borderColor' | 'labelColor', event: Event): void {
+    const value = (event.target as HTMLInputElement).value;
     this.config.update((curr) => ({ ...curr, [key]: value }));
   }
 

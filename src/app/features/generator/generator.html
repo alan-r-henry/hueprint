@@ -55,6 +55,31 @@
           />
           <span class="helper-text">Suppresses stray, isolated speckle noise.</span>
         </div>
+        <div class="color-group">
+          <label class="slider-header"><span>Guide Colours:</span></label>
+          <div class="color-row">
+            <label class="color-field">
+              <input
+                type="color"
+                [value]="config().borderColor"
+                (input)="updateConfigColor('borderColor', $event)"
+              />
+              <span>Borders</span>
+            </label>
+            <label class="color-field">
+              <input
+                type="color"
+                [value]="config().labelColor"
+                (input)="updateConfigColor('labelColor', $event)"
+              />
+              <span>Numbers</span>
+            </label>
+          </div>
+          <span class="helper-text">
+            Lighter guides are harder to follow on screen but disappear under the finished paint.
+          </span>
+        </div>
+
         <button
           class="action-btn generate-btn"
           [disabled]="!selectedFile() || isProcessing()"
