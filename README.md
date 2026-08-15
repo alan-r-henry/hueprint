@@ -1,4 +1,4 @@
-# Paint by Numbers
+# Hueprint
 
 Turn any photograph into a printable paint-by-numbers template — colour-clustered, outlined, numbered, and exported as clean vector SVG. Everything runs in the browser; no image ever leaves your machine.
 
@@ -39,6 +39,12 @@ Every intermediate stage is exposed as its own tab, so you can see exactly what 
 
 This makes the app useful as a teaching tool as much as a generator — the failure modes of each algorithm are visible rather than hidden behind a single output.
 
+### The final view paints itself
+
+The **Final** tab loops through the template being painted: it rests unpainted, then fills one colour every half second starting with the largest area, dropping each region's outline and number as its colour lands, so finished areas read as solid paint. Once the picture is complete it holds for five seconds and starts over.
+
+Hovering the download button clears it back to the empty template and holds it there, so you can see what you are about to save. The animation is generated CSS driven entirely by the browser, and it honours `prefers-reduced-motion`. It is applied to the on-screen copy only — **the downloaded SVG is static and keeps its outlines and numbers**, as a printable template must.
+
 ## Controls
 
 | Parameter           | Range | Default | Effect                                                                                         |
@@ -46,8 +52,12 @@ This makes the app useful as a teaching tool as much as a generator — the fail
 | `clusterCount`      | 2–24  | 8       | Number of colours in the final palette. Fewer colours means a simpler, more abstract painting. |
 | `minFacetArea`      | 1–100 | 10      | Smallest region kept, in pixels. Raise it to remove fiddly detail.                             |
 | `maxImageDimension` | —     | 600     | Longest edge after downsampling. Higher retains detail but costs processing time.              |
+| `borderColor`       | —     | #444444 | Colour of the facet outlines. Lighter values disappear under the finished paint.               |
+| `labelColor`        | —     | #111111 | Colour of the facet numbers. Same trade-off as the borders.                                    |
 
-Finished templates export via **Download SVG** as `paint-by-numbers-master.svg`.
+Colours are numbered by area: **1 is always the largest region**, 2 the next, and so on.
+
+Finished templates export via **Download SVG** as `hueprint-template.svg`.
 
 ## Running locally
 

@@ -181,7 +181,7 @@ export class GeneratorComponent {
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'paint-by-numbers-master.svg';
+    a.download = 'hueprint-template.svg';
     a.click();
     window.URL.revokeObjectURL(url);
   }
