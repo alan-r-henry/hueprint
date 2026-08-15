@@ -118,6 +118,17 @@ export class PaintEngineService {
       frequencyMap.set(labels[i], (frequencyMap.get(labels[i]) || 0) + 1);
     }
 
+    // Number the palette by how much of the image each colour covers, so 1 is always the largest
+    // area, 2 the next, and so on. Cluster indices come out of k-means in arbitrary order, which
+    // would otherwise scatter the numbering across the template for no reason.
+    //
+    // Ties break on cluster index so a given image always numbers the same way.
+    const displayNumberByCluster = new Map<number, number>();
+    palette
+      .map((_, clusterIndex) => clusterIndex)
+      .sort((a, b) => (frequencyMap.get(b) ?? 0) - (frequencyMap.get(a) ?? 0) || a - b)
+      .forEach((clusterIndex, rank) => displayNumberByCluster.set(clusterIndex, rank + 1));
+
     // The root class scopes every rule below. An inline <style> inside an inline SVG is applied
     // document-wide, so unscoped `path`/`text` selectors would restyle every other SVG on the page.
     const root = PaintEngineService.ROOT_CLASS;
@@ -248,7 +259,7 @@ export class PaintEngineService {
           //
           // Every layer carries a per-colour class so the view can drive the painting animation
           // without re-parsing path data. See buildPaintAnimationCss().
-          const colourId = targetCluster + 1;
+          const colourId = displayNumberByCluster.get(targetCluster)!;
           const fillClasses = `${PaintEngineService.FILL_CLASS} ${PaintEngineService.FILL_CLASS}-${colourId}`;
           const outlineClasses = `${PaintEngineService.OUTLINE_CLASS} ${PaintEngineService.OUTLINE_CLASS}-${colourId}`;
           const labelClasses = `${PaintEngineService.LABEL_CLASS} ${PaintEngineService.LABEL_CLASS}-${colourId}`;
@@ -272,13 +283,14 @@ export class PaintEngineService {
     const placementSvg = svgHeader + styleBase + placementElements + `</svg>`;
     const finalSvg = svgHeader + styleBase + finalCompositeLayers + `</svg>`;
 
+    // Sorting by id is the same as sorting by descending area, since that is how ids were assigned.
     const finalPalette = palette
       .map((rgb, index) => ({
-        id: index + 1,
+        id: displayNumberByCluster.get(index)!,
         hex: this.rgbToHex(rgb),
-        percentage: Number((((frequencyMap.get(index) || 0) / totalPixels) * 100).toFixed(1)),
+        percentage: Number((((frequencyMap.get(index) ?? 0) / totalPixels) * 100).toFixed(1)),
       }))
-      .sort((a, b) => b.percentage - a.percentage);
+      .sort((a, b) => a.id - b.id);
 
     return {
       width,

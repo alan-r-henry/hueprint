@@ -89,6 +89,22 @@ export class GeneratorComponent {
     this.config.update((curr) => ({ ...curr, [key]: value }));
   }
 
+  /**
+   * Picks a readable text colour for a palette swatch.
+   *
+   * Uses the swatch's own relative luminance (ITU-R BT.709 coefficients), so dark colours get
+   * white text and light colours get black. The share of the image a colour covers says nothing
+   * about how bright it is, so it cannot be used for this.
+   */
+  swatchTextColor(hex: string): string {
+    const value = hex.replace('#', '');
+    const r = parseInt(value.slice(0, 2), 16) / 255;
+    const g = parseInt(value.slice(2, 4), 16) / 255;
+    const b = parseInt(value.slice(4, 6), 16) / 255;
+
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.55 ? '#000000' : '#ffffff';
+  }
+
   /** Updates a guide colour from a colour input. */
   updateConfigColor(key: 'borderColor' | 'labelColor', event: Event): void {
     const value = (event.target as HTMLInputElement).value;
